@@ -351,6 +351,12 @@ class MainWindow(QMainWindow):
             return False
         return QKeySequence(event.keyCombination()) == QKeySequence(sequence_str)
 
+    def toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            self.showNormal()
+        else:
+            self.showFullScreen()
+
     def eventFilter(self, obj, event) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             if QApplication.activeModalWidget() is not None:
@@ -363,6 +369,10 @@ class MainWindow(QMainWindow):
             filter_edit = self.project_view.browser.filter_edit
             pid = self.state.selected_project_id
             browsing = pid is not None and pid in self.state.browse_path
+
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                self.toggle_fullscreen()
+                return True
 
             if self._key_matches(event, "back_out"):
                 self.handle_escape()
