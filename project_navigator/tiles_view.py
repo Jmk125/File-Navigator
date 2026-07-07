@@ -84,7 +84,10 @@ class FolderTileList(QListWidget):
         self.setFlow(QListView.LeftToRight)
         self.setWrapping(wrap)
         self.setResizeMode(QListView.Adjust)
-        self.setMovement(QListView.Static)
+        # QListView.Static disables ALL user-driven icon dragging in IconMode,
+        # which also silently disables InternalMove reordering below - Snap is
+        # what actually lets you drag a tile to reassign its hotkey number.
+        self.setMovement(QListView.Snap)
         self.setDragDropMode(QAbstractItemView.InternalMove)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setSpacing(6)

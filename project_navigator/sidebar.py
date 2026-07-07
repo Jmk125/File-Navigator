@@ -24,6 +24,7 @@ class ProjectItemDelegate(QStyledItemDelegate):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.edit_mode = False
+        self.show_hotkeys = False
 
     def sizeHint(self, option, index):
         return QSize(option.rect.width(), ROW_HEIGHT)
@@ -49,6 +50,7 @@ class ProjectItemDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option, index):
         painter.save()
         rect = option.rect
+        base_font = painter.font()
         selected = bool(option.state & QStyle.State_Selected)
         color = QColor(index.data(COLOR_ROLE) or "#2d5f9f")
 
@@ -64,6 +66,22 @@ class ProjectItemDelegate(QStyledItemDelegate):
 
         name = index.data(NAME_ROLE) or ""
         text_left = rect.left() + 22
+        hotkey = index.row() + 1
+        if self.show_hotkeys and hotkey <= 9:
+            badge_rect = _make_rect(rect.left() + 18, rect.top() + (rect.height() - 18) // 2, 18, 18)
+            painter.setPen(Qt.NoPen)
+            badge_bg = QColor(0, 0, 0)
+            badge_bg.setAlpha(176)
+            painter.setBrush(badge_bg)
+            painter.drawEllipse(badge_rect)
+            painter.setPen(QColor("#ffffff"))
+            badge_font = painter.font()
+            badge_font.setPointSize(9)
+            badge_font.setBold(True)
+            painter.setFont(badge_font)
+            painter.drawText(badge_rect, Qt.AlignCenter, str(hotkey))
+            painter.setFont(base_font)
+            text_left = badge_rect.right() + 8
         text_right = rect.right() - BUTTON_MARGIN
         if self.edit_mode:
             text_right = min(text_right, min(r.left() for r in self.button_rects(rect).values()) - 8)
@@ -112,12 +130,22 @@ class ProjectListWidget(QListWidget):
             "QListWidget::item { border: none; }"
             "QListWidget::item:selected, QListWidget::item:hover { background: transparent; }"
         )
+        # itemClicked only fires for a genuine click (Qt itself withholds it
+        # once a press turns into a drag past the drag-start threshold), so
+        # activation naturally leaves drag-to-reorder alone. Emitting this
+        # from mousePressEvent instead would rebuild the whole list mid-press
+        # (see below) and corrupt Qt's in-progress drag tracking.
+        self.itemClicked.connect(lambda item: self.projectActivated.emit(item.data(Qt.UserRole)))
 
     def set_edit_mode(self, on: bool) -> None:
         self._delegate.edit_mode = on
         self.viewport().update()
 
     def set_projects(self, projects: list[dict], selected_id: str | None) -> None:
+        # Project jump-hotkeys (1-9) only apply when nothing is selected yet -
+        # once you're in a project, those keys belong to its quick access
+        # folders instead, so hide the badges to match.
+        self._delegate.show_hotkeys = selected_id is None
         self.blockSignals(True)
         self.clear()
         for project in projects:
@@ -146,8 +174,6 @@ class ProjectListWidget(QListWidget):
                     self.deleteRequested.emit(pid)
                 return
         super().mousePressEvent(event)
-        if item is not None:
-            self.projectActivated.emit(item.data(Qt.UserRole))
 
     def dropEvent(self, event) -> None:
         super().dropEvent(event)
