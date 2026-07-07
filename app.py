@@ -12,7 +12,8 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from project_navigator.main_window import MainWindow
-from project_navigator.theme import apply_dark_theme
+from project_navigator.settings import load_settings
+from project_navigator.theme import apply_theme
 
 APP_NAME = "Project Navigator"
 
@@ -20,7 +21,7 @@ APP_NAME = "Project Navigator"
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    apply_dark_theme(app)
+    apply_theme(app, load_settings()["theme"])
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

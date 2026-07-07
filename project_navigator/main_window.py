@@ -4,14 +4,17 @@ from __future__ import annotations
 import os
 
 from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
     QApplication, QDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPlainTextEdit, QSplitter, QStackedWidget, QTextEdit,
 )
 
-from . import storage
+from . import storage, theme
 from .dialogs import ProjectDialog, QuickAccessDialog
 from .project_view import ProjectView
+from .settings import load_settings, save_settings
+from .settings_dialog import SettingsDialog
 from .sidebar import SidebarWidget
 from .state import NavigatorState
 from .tiles_view import EmptyStateView
@@ -32,12 +35,16 @@ class MainWindow(QMainWindow):
         self.state = NavigatorState()
         self.state.load()
 
+        self.settings = load_settings()
+        self.hotkeys = self.settings["hotkeys"]
+
         self.sidebar = SidebarWidget()
         self.sidebar.setMinimumWidth(200)
         self.sidebar.setMaximumWidth(360)
 
         self.empty_state = EmptyStateView()
         self.project_view = ProjectView()
+        self.project_view.set_split_sizes(self.settings["splitter_sizes"])
 
         self.content_stack = QStackedWidget()
         self.content_stack.addWidget(self.empty_state)
@@ -63,6 +70,7 @@ class MainWindow(QMainWindow):
     # ---- wiring -----------------------------------------------------------------
     def _connect_signals(self) -> None:
         self.sidebar.addProjectClicked.connect(self.on_add_project)
+        self.sidebar.settingsClicked.connect(self.on_open_settings)
         self.sidebar.list.projectActivated.connect(self.on_project_selected)
         self.sidebar.list.editRequested.connect(self.on_edit_project)
         self.sidebar.list.duplicateRequested.connect(self.on_duplicate_project)
@@ -73,6 +81,7 @@ class MainWindow(QMainWindow):
         self.project_view.foldersReordered.connect(self.on_folders_reordered)
         self.project_view.recentFileOpened.connect(self.on_open_file)
         self.project_view.recentFileRemoved.connect(self.on_remove_recent)
+        self.project_view.splitSizesChanged.connect(self.on_split_sizes_changed)
 
         self.project_view.navigateInto.connect(self.on_navigate_into)
         self.project_view.navigateUp.connect(self.on_navigate_up)
@@ -180,6 +189,28 @@ class MainWindow(QMainWindow):
         self.refresh_sidebar()
         self.render_content()
 
+    # ---- settings ---------------------------------------------------------------------
+    def on_open_settings(self) -> None:
+        dialog = SettingsDialog(self, theme=self.settings["theme"], hotkeys=self.hotkeys)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_theme, new_hotkeys = dialog.values()
+            self.settings["theme"] = new_theme
+            self.settings["hotkeys"] = new_hotkeys
+            self.hotkeys = new_hotkeys
+            save_settings(self.settings)
+
+            app = QApplication.instance()
+            if app is not None:
+                theme.apply_theme(app, new_theme)
+            # Custom-painted delegates read colors at paint time but won't
+            # repaint on their own - force a rebuild so the new theme shows.
+            self.refresh_sidebar()
+            self.render_content()
+
+    def on_split_sizes_changed(self, sizes: list) -> None:
+        self.settings["splitter_sizes"] = list(sizes)
+        save_settings(self.settings)
+
     # ---- folder / browsing actions --------------------------------------------------
     def on_folder_activated(self, path: str) -> None:
         pid = self.state.selected_project_id
@@ -283,7 +314,10 @@ class MainWindow(QMainWindow):
         self.state.remove_recent_file(pid, index)
         self.render_content()
 
-    # ---- global keyboard handling: Escape backs out, 1-9 jump into folders ------------
+    # ---- global keyboard handling -------------------------------------------------------
+    # Escape backs out one step at a time; 1-9 jump into a quick access folder;
+    # a handful of other actions (back/up/add-to-quick-access) are rebindable
+    # via Settings - see settings.DEFAULT_HOTKEYS.
     def handle_escape(self) -> None:
         pid = self.state.selected_project_id
         if pid and pid in self.state.browse_path:
@@ -303,23 +337,49 @@ class MainWindow(QMainWindow):
             return False
         return self.project_view.open_by_hotkey(digit)
 
+    def _key_matches(self, event, action: str) -> bool:
+        sequence_str = self.hotkeys.get(action)
+        if not sequence_str:
+            return False
+        return QKeySequence(event.keyCombination()) == QKeySequence(sequence_str)
+
     def eventFilter(self, obj, event) -> bool:
         if event.type() == QEvent.Type.KeyPress:
             if QApplication.activeModalWidget() is not None:
                 return super().eventFilter(obj, event)
 
             key = event.key()
-            if key == Qt.Key.Key_Escape:
-                self.handle_escape()
-                return True
-
             focus_widget = QApplication.focusWidget()
             is_text_input = isinstance(focus_widget, TEXT_INPUT_TYPES)
+            tree = self.project_view.browser.tree
+            filter_edit = self.project_view.browser.filter_edit
+
+            if self._key_matches(event, "back_out"):
+                self.handle_escape()
+                return True
 
             if not is_text_input and Qt.Key.Key_1 <= key <= Qt.Key.Key_9:
                 digit = key - Qt.Key.Key_0
                 if self.handle_digit_hotkey(digit):
                     return True
+
+            if self._key_matches(event, "navigate_back"):
+                # Let it delete a character if there's filter text to delete;
+                # otherwise (or outside any text field) it means "go back".
+                if not is_text_input or (focus_widget is filter_edit and not filter_edit.text()):
+                    self.on_navigate_back()
+                    return True
+
+            if self._key_matches(event, "navigate_up") and focus_widget is not tree:
+                # Once focus is actually in the file list, let the key behave
+                # natively there (e.g. move selection) instead of navigating up.
+                if not is_text_input or focus_widget is filter_edit:
+                    self.on_navigate_up()
+                    return True
+
+            if self._key_matches(event, "add_quick_access") and not is_text_input:
+                self.on_add_to_quick_access()
+                return True
 
             # Type-ahead: if browsing and the file list (not a text box) has focus,
             # forward the first keystroke to the filter box instead of requiring a click.
@@ -328,12 +388,11 @@ class MainWindow(QMainWindow):
             if (
                 browsing
                 and not is_text_input
-                and focus_widget is self.project_view.browser.tree
+                and focus_widget is tree
                 and event.text()
                 and event.text().isprintable()
                 and not event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
             ):
-                filter_edit = self.project_view.browser.filter_edit
                 filter_edit.setFocus()
                 filter_edit.setText(filter_edit.text() + event.text())
                 return True
