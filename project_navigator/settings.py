@@ -14,6 +14,7 @@ DEFAULT_HOTKEYS = {
     "navigate_back": "Backspace",
     "navigate_up": "Up",
     "add_quick_access": "+",
+    "cycle_selection": "Tab",
 }
 
 HOTKEY_LABELS = {
@@ -21,6 +22,7 @@ HOTKEY_LABELS = {
     "navigate_back": "Navigate back",
     "navigate_up": "Navigate up one folder",
     "add_quick_access": "Add current folder to quick access",
+    "cycle_selection": "Cycle file/folder selector (Shift+ reverses)",
 }
 
 DEFAULT_SETTINGS = {

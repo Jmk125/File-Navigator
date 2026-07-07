@@ -361,6 +361,8 @@ class MainWindow(QMainWindow):
             is_text_input = isinstance(focus_widget, TEXT_INPUT_TYPES)
             tree = self.project_view.browser.tree
             filter_edit = self.project_view.browser.filter_edit
+            pid = self.state.selected_project_id
+            browsing = pid is not None and pid in self.state.browse_path
 
             if self._key_matches(event, "back_out"):
                 self.handle_escape()
@@ -389,10 +391,19 @@ class MainWindow(QMainWindow):
                 self.on_add_to_quick_access()
                 return True
 
+            # Tab/Shift+Tab cycle the file/folder selector. The filter box has
+            # focus by default while browsing, so allow it from there too -
+            # only other text inputs (dialog fields, etc.) are exempt.
+            if browsing and (not is_text_input or focus_widget is filter_edit):
+                if self._key_matches(event, "cycle_selection"):
+                    self.project_view.browser.cycle_selection(1)
+                    return True
+                if key == Qt.Key.Key_Backtab:
+                    self.project_view.browser.cycle_selection(-1)
+                    return True
+
             # Type-ahead: if browsing and the file list (not a text box) has focus,
             # forward the first keystroke to the filter box instead of requiring a click.
-            pid = self.state.selected_project_id
-            browsing = pid is not None and pid in self.state.browse_path
             if (
                 browsing
                 and not is_text_input
