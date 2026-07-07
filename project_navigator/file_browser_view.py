@@ -185,10 +185,22 @@ class FileBrowserView(QWidget):
 
     def _apply_filter(self, text: str) -> None:
         needle = text.strip().lower()
+        first_visible_row = -1
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
             name = (item.text(0) or "").lower()
-            item.setHidden(bool(needle) and needle not in name)
+            hidden = bool(needle) and needle not in name
+            item.setHidden(hidden)
+            if not hidden and first_visible_row == -1:
+                first_visible_row = i
+
+        if needle:
+            # Keep the selector on the top match as you type, so Enter opens
+            # it the moment you've narrowed it down - no need to press Down.
+            if first_visible_row >= 0:
+                self.tree.setCurrentItem(self.tree.topLevelItem(first_visible_row))
+            else:
+                self.tree.setCurrentItem(None)
 
     def _activate_item(self, item: QTreeWidgetItem, _column: int) -> None:
         path = item.data(0, PATH_ROLE)
