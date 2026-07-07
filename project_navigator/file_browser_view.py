@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import theme
-from .icons import file_icon, format_file_size, format_modified
+from .icons import darken, file_icon, format_file_size, format_modified
 
 PATH_ROLE = Qt.UserRole
 IS_DIR_ROLE = Qt.UserRole + 1
@@ -134,6 +134,7 @@ class FileBrowserView(QWidget):
     def set_data(self, history: list[str], items: list[dict], color: str) -> None:
         self.breadcrumb.set_history(history)
         self._apply_header_color(color)
+        self._apply_selection_style(color)
         self.tree.clear()
         for entry in items:
             icon = "\U0001F4C1" if entry["isDirectory"] else file_icon(entry["name"])
@@ -155,6 +156,17 @@ class FileBrowserView(QWidget):
             f" border: none;"
             f" font-weight: 600;"
             f" }}"
+        )
+
+    def _apply_selection_style(self, color: str) -> None:
+        # A darker shade of the project's own color, echoing how the active
+        # project is highlighted in the sidebar, rather than the generic
+        # theme accent - so the Tab-cycled selector reads as "this project".
+        highlight = darken(color, 0.5)
+        text_color = "#1a1a1a" if _is_light(highlight) else "#ffffff"
+        self.tree.setStyleSheet(
+            f"QTreeWidget::item:selected {{ background: {highlight}; color: {text_color}; }}"
+            f"QTreeWidget::item:selected:!active {{ background: {highlight}; color: {text_color}; }}"
         )
 
     def show_error(self, message: str) -> None:
@@ -193,6 +205,25 @@ class FileBrowserView(QWidget):
             if not self.tree.topLevelItem(i).isHidden():
                 return i
         return -1
+
+    def cycle_selection(self, step: int) -> None:
+        """Move the highlighted row to the next (step=1) or previous (step=-1)
+        visible item, wrapping around, and give the list keyboard focus."""
+        visible_rows = [
+            i for i in range(self.tree.topLevelItemCount()) if not self.tree.topLevelItem(i).isHidden()
+        ]
+        if not visible_rows:
+            return
+
+        target_row = visible_rows[0]
+        if self.tree.hasFocus():
+            current = self.tree.currentItem()
+            current_row = self.tree.indexOfTopLevelItem(current) if current else -1
+            if current_row in visible_rows:
+                target_row = visible_rows[(visible_rows.index(current_row) + step) % len(visible_rows)]
+
+        self.tree.setFocus()
+        self.tree.setCurrentItem(self.tree.topLevelItem(target_row))
 
     def eventFilter(self, obj, event) -> bool:
         tree = getattr(self, "tree", None)

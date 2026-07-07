@@ -31,6 +31,14 @@ def tint(hex_color: str, alpha: int) -> str:
     return f"rgba({r}, {g}, {b}, {alpha})"
 
 
+def darken(hex_color: str, factor: float = 0.55) -> str:
+    """A darker shade of hex_color, e.g. for a project-colored selection highlight."""
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+    r, g, b = (max(0, min(255, int(c * factor))) for c in (r, g, b))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 def file_icon(filename: str) -> str:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return FILE_ICONS.get(ext, DEFAULT_FILE_ICON)
