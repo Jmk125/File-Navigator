@@ -380,27 +380,9 @@ class MainWindow(QMainWindow):
                     self.on_navigate_back()
                     return True
 
-            if self._key_matches(event, "navigate_up") and focus_widget is not tree:
-                # Once focus is actually in the file list, let the key behave
-                # natively there (e.g. move selection) instead of navigating up.
-                if not is_text_input or focus_widget is filter_edit:
-                    self.on_navigate_up()
-                    return True
-
             if self._key_matches(event, "add_quick_access") and not is_text_input:
                 self.on_add_to_quick_access()
                 return True
-
-            # Tab/Shift+Tab cycle the file/folder selector. The filter box has
-            # focus by default while browsing, so allow it from there too -
-            # only other text inputs (dialog fields, etc.) are exempt.
-            if browsing and (not is_text_input or focus_widget is filter_edit):
-                if self._key_matches(event, "cycle_selection"):
-                    self.project_view.browser.cycle_selection(1)
-                    return True
-                if key == Qt.Key.Key_Backtab:
-                    self.project_view.browser.cycle_selection(-1)
-                    return True
 
             # Type-ahead: if browsing and the file list (not a text box) has focus,
             # forward the first keystroke to the filter box instead of requiring a click.
