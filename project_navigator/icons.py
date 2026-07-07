@@ -19,6 +19,18 @@ DEFAULT_FILE_ICON = "\U0001F4C4"
 FOLDER_ICON = "\U0001F4C1"
 
 
+def tint(hex_color: str, alpha: int) -> str:
+    """A translucent version of hex_color for use in Qt stylesheets.
+
+    Qt's stylesheet/QColor hex parser treats 8-digit strings as #AARRGGBB
+    (alpha first), unlike CSS's #RRGGBBAA - so plain string concatenation
+    like f"{hex_color}30" is silently wrong. Use rgba() instead.
+    """
+    hex_color = hex_color.lstrip("#")
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
 def file_icon(filename: str) -> str:
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     return FILE_ICONS.get(ext, DEFAULT_FILE_ICON)

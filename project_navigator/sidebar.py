@@ -48,11 +48,15 @@ class ProjectItemDelegate(QStyledItemDelegate):
         painter.save()
         rect = option.rect
         selected = bool(option.state & QStyle.State_Selected)
+        color = QColor(index.data(COLOR_ROLE) or "#2d5f9f")
 
         if selected:
-            painter.fillRect(rect, QColor("#2d5f9f40"))
+            # QColor's 8-digit hex string constructor expects #AARRGGBB, not
+            # CSS's #RRGGBBAA - use setAlpha() to avoid misparsing the color.
+            highlight = QColor(color)
+            highlight.setAlpha(64)
+            painter.fillRect(rect, highlight)
 
-        color = QColor(index.data(COLOR_ROLE) or "#2d5f9f")
         swatch = _make_rect(rect.left() + 8, rect.top() + 8, 4, rect.height() - 16)
         painter.fillRect(swatch, color)
 
@@ -98,6 +102,13 @@ class ProjectListWidget(QListWidget):
         self.setItemDelegate(self._delegate)
         self.setFrameShape(self.Shape.NoFrame)
         self.setFocusPolicy(Qt.NoFocus)
+        # The delegate paints selection itself (in the project's own color);
+        # suppress the app-wide QSS/palette selection tint so it doesn't show
+        # through underneath as a mismatched color.
+        self.setStyleSheet(
+            "QListWidget::item { border: none; }"
+            "QListWidget::item:selected, QListWidget::item:hover { background: transparent; }"
+        )
 
     def set_edit_mode(self, on: bool) -> None:
         self._delegate.edit_mode = on

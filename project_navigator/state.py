@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Optional
 
 from . import storage
@@ -42,7 +43,7 @@ class NavigatorState:
     # ---- project CRUD -----------------------------------------------------
     def add_project(self, name: str, color: str, quick_folders: list[dict]) -> dict:
         project = {
-            "id": str(int(time.time() * 1000)),
+            "id": uuid.uuid4().hex,
             "name": name,
             "color": color,
             "quickFolders": quick_folders,
