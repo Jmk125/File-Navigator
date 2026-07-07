@@ -230,21 +230,22 @@ class FileBrowserView(QWidget):
         if tree is None:
             return super().eventFilter(obj, event)
 
-        if obj is self.filter_edit and event.type() == event.Type.KeyPress:
+        # Handled identically whether the filter box or the list itself has
+        # focus, so arrow-key cycling works without ever leaving the search bar.
+        if obj in (self.filter_edit, tree) and event.type() == event.Type.KeyPress:
             key = event.key()
-            if key in (Qt.Key_Down, Qt.Key_Up, Qt.Key_Return, Qt.Key_Enter):
-                tree.setFocus()
+            if key == Qt.Key_Down:
+                self.cycle_selection(1)
+                return True
+            if key == Qt.Key_Up:
+                self.cycle_selection(-1)
+                return True
+            if key in (Qt.Key_Return, Qt.Key_Enter):
                 if tree.currentItem() is None:
                     row = self._first_visible_row()
                     if row >= 0:
                         tree.setCurrentItem(tree.topLevelItem(row))
-                if key in (Qt.Key_Return, Qt.Key_Enter) and tree.currentItem():
+                if tree.currentItem():
                     self._activate_item(tree.currentItem(), 0)
-                    return True
-                tree.keyPressEvent(event)
-                return True
-        if obj is tree and event.type() == event.Type.KeyPress:
-            if event.key() in (Qt.Key_Return, Qt.Key_Enter) and tree.currentItem():
-                self._activate_item(tree.currentItem(), 0)
                 return True
         return super().eventFilter(obj, event)

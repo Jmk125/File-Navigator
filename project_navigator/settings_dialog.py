@@ -33,7 +33,9 @@ class SettingsDialog(QDialog):
         layout.addWidget(QLabel("Hotkeys"))
         hint = QLabel(
             "Click a field and press a key to rebind it. Folder jump keys (1-9) aren't "
-            "listed here - drag a quick-access tile to reorder it and reassign its number."
+            "listed here - drag a quick-access tile to reorder it and reassign its number. "
+            "Arrow keys always cycle the file/folder selector and Enter opens/enters it - "
+            "those aren't rebindable either."
         )
         hint.setObjectName("mutedHint")
         hint.setWordWrap(True)

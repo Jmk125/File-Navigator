@@ -9,20 +9,18 @@ THEME_NAMES = ("dark", "medium", "light")
 
 # The 1-9 folder-jump keys aren't listed here - their "binding" is the
 # folder's position, which you already control by dragging tiles to reorder.
+# Likewise, arrow keys always cycle the file/folder selector (Up/Down) and
+# aren't rebindable - that's core list navigation, not a discretionary hotkey.
 DEFAULT_HOTKEYS = {
     "back_out": "Esc",
     "navigate_back": "Backspace",
-    "navigate_up": "Up",
     "add_quick_access": "+",
-    "cycle_selection": "Tab",
 }
 
 HOTKEY_LABELS = {
     "back_out": "Back out (clear filter, then close browser, then deselect project)",
     "navigate_back": "Navigate back",
-    "navigate_up": "Navigate up one folder",
     "add_quick_access": "Add current folder to quick access",
-    "cycle_selection": "Cycle file/folder selector (Shift+ reverses)",
 }
 
 DEFAULT_SETTINGS = {
