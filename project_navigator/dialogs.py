@@ -42,7 +42,8 @@ class ProjectDialog(QDialog):
 
         layout.addWidget(QLabel("Quick Access Locations"))
         hint = QLabel("Add folders from anywhere - PM server, estimating server, local drives, etc.")
-        hint.setStyleSheet("color: #888; font-size: 12px;")
+        hint.setObjectName("mutedHint")
+        hint.setStyleSheet("font-size: 12px;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
@@ -175,7 +176,8 @@ class QuickAccessDialog(QDialog):
         layout.addLayout(form)
 
         path_label = QLabel(path)
-        path_label.setStyleSheet("color: #888; font-size: 12px; font-family: monospace;")
+        path_label.setObjectName("mutedHint")
+        path_label.setStyleSheet("font-size: 12px; font-family: monospace;")
         path_label.setWordWrap(True)
         layout.addWidget(QLabel("Path"))
         layout.addWidget(path_label)

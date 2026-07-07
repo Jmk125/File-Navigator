@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
+from . import theme
 from .icons import file_icon, format_file_size, format_modified
 
 PATH_ROLE = Qt.UserRole
@@ -37,19 +38,22 @@ class Breadcrumb(QWidget):
     def set_history(self, history: list[str]) -> None:
         while self.layout_.count():
             child = self.layout_.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+            widget = child.widget()
+            if widget:
+                widget.hide()
+                widget.deleteLater()
 
+        colors = theme.current()
         for index, path in enumerate(history):
             name = os.path.basename(path.rstrip("\\/")) or path
             label = QLabel(("\U0001F3E0 " if index == 0 else "") + name)
-            label.setStyleSheet("color: #2d5f9f;")
+            label.setStyleSheet(f"color: {colors['ACCENT']};")
             label.setCursor(Qt.PointingHandCursor)
             label.mousePressEvent = lambda e, i=index: self.segmentClicked.emit(i)
             self.layout_.addWidget(label)
             if index < len(history) - 1:
                 sep = QLabel("›")
-                sep.setStyleSheet("color: #555;")
+                sep.setStyleSheet(f"color: {colors['MUTED']};")
                 self.layout_.addWidget(sep)
 
         if len(history) > 1:

@@ -8,6 +8,8 @@ from PySide6.QtWidgets import (
     QStyle, QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget,
 )
 
+from . import theme
+
 NAME_ROLE = Qt.UserRole + 1
 COLOR_ROLE = Qt.UserRole + 2
 ROW_HEIGHT = 44
@@ -66,7 +68,8 @@ class ProjectItemDelegate(QStyledItemDelegate):
         if self.edit_mode:
             text_right = min(text_right, min(r.left() for r in self.button_rects(rect).values()) - 8)
 
-        painter.setPen(QColor("#f0f0f0"))
+        colors = theme.current()
+        painter.setPen(QColor(colors["TEXT"]))
         metrics = QFontMetrics(painter.font())
         elided = metrics.elidedText(name, Qt.ElideRight, max(10, text_right - text_left))
         text_rect = _make_rect(text_left, rect.top(), max(10, text_right - text_left), rect.height())
@@ -75,7 +78,7 @@ class ProjectItemDelegate(QStyledItemDelegate):
         if self.edit_mode:
             glyphs = {"duplicate": "⧉", "edit": "✎", "delete": "\U0001F5D1"}
             for action, r in self.button_rects(rect).items():
-                painter.setPen(QColor("#cccccc"))
+                painter.setPen(QColor(colors["MUTED"]))
                 painter.drawText(r, Qt.AlignCenter, glyphs[action])
 
         painter.restore()
@@ -154,6 +157,7 @@ class ProjectListWidget(QListWidget):
 
 class SidebarWidget(QWidget):
     addProjectClicked = Signal()
+    settingsClicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -163,9 +167,16 @@ class SidebarWidget(QWidget):
 
         header = QHBoxLayout()
         title = QLabel("Projects")
-        title.setStyleSheet("font-weight: 600; color: #aaa; font-size: 12px; text-transform: uppercase;")
+        title.setObjectName("sectionTitle")
         header.addWidget(title)
         header.addStretch()
+
+        self.settings_button = QToolButton()
+        self.settings_button.setText("⚙")
+        self.settings_button.setToolTip("Settings (theme, hotkeys)")
+        self.settings_button.setAutoRaise(True)
+        self.settings_button.clicked.connect(self.settingsClicked)
+        header.addWidget(self.settings_button)
 
         self.edit_toggle = QToolButton()
         self.edit_toggle.setText("✎")

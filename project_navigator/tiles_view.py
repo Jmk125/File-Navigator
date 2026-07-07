@@ -4,10 +4,11 @@ from __future__ import annotations
 from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QLabel, QListView, QListWidget, QListWidgetItem,
-    QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget,
+    QAbstractItemView, QFrame, QHBoxLayout, QLabel, QListView, QListWidget, QListWidgetItem,
+    QScrollArea, QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget,
 )
 
+from . import theme
 from .icons import FOLDER_ICON, format_relative_time, tint
 
 PATH_ROLE = Qt.UserRole
@@ -38,7 +39,7 @@ class FolderTileDelegate(QStyledItemDelegate):
         icon_font = painter.font()
         icon_font.setPointSize(22)
         painter.setFont(icon_font)
-        painter.setPen(QColor("#f0f0f0"))
+        painter.setPen(QColor(theme.current()["TEXT"]))
         icon_rect = QRect(rect.left(), rect.top() + 8, rect.width(), 30)
         painter.drawText(icon_rect, Qt.AlignCenter, FOLDER_ICON)
 
@@ -137,10 +138,11 @@ class RecentFileRow(QWidget):
         layout.setContentsMargins(10, 6, 10, 6)
         self.setStyleSheet(f"background: {tint(color, 48)}; border-radius: 6px;")
 
+        muted = theme.current()["MUTED"]
         text = QLabel(f"\U0001F4C4 {file_entry['name']}")
         text.setStyleSheet("font-weight: 500;")
         path_label = QLabel(file_entry["path"])
-        path_label.setStyleSheet("color: #888; font-size: 11px;")
+        path_label.setStyleSheet(f"color: {muted}; font-size: 11px;")
 
         text_col = QVBoxLayout()
         text_col.addWidget(text)
@@ -148,7 +150,7 @@ class RecentFileRow(QWidget):
         layout.addLayout(text_col, 1)
 
         time_label = QLabel(format_relative_time(file_entry["timestamp"]))
-        time_label.setStyleSheet("color: #888; font-size: 11px;")
+        time_label.setStyleSheet(f"color: {muted}; font-size: 11px;")
         layout.addWidget(time_label)
 
         self.remove_button = QToolButton()
@@ -167,6 +169,61 @@ class RecentFileRow(QWidget):
         pass  # overridden per-instance via signal connection from ProjectView
 
 
+class RecentFilesPanel(QWidget):
+    """Scrollable recent-files list; the bottom half of the browser/recent
+    files split so a long history doesn't blow out the fixed pane height."""
+
+    recentFileOpened = Signal(str)
+    recentFileRemoved = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        self.title = QLabel("RECENT FILES")
+        self.title.setObjectName("sectionTitle")
+        layout.addWidget(self.title)
+
+        self.empty_label = QLabel("No recent files yet.")
+        self.empty_label.setObjectName("mutedHint")
+        layout.addWidget(self.empty_label)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.content = QWidget()
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(8)
+        self.content_layout.addStretch()
+        self.scroll.setWidget(self.content)
+        layout.addWidget(self.scroll, 1)
+
+    def set_recent(self, recent_files: list[dict], color: str) -> None:
+        while self.content_layout.count() > 1:
+            item = self.content_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                # takeAt() only detaches it from the layout - it stays a visible
+                # child of self.content (and keeps painting at its old spot)
+                # until the deferred deleteLater() actually runs, so hide it now.
+                widget.hide()
+                widget.deleteLater()
+
+        has_files = bool(recent_files)
+        self.title.setVisible(has_files)
+        self.scroll.setVisible(has_files)
+        self.empty_label.setVisible(not has_files)
+
+        for index, entry in enumerate(recent_files):
+            row = RecentFileRow(entry, color)
+            row.openRequested = lambda path, i=index: self.recentFileOpened.emit(path)
+            row.remove_button.clicked.connect(lambda checked=False, i=index: self.recentFileRemoved.emit(i))
+            self.content_layout.insertWidget(self.content_layout.count() - 1, row)
+
+
 class EmptyStateView(QWidget):
     """Shown in the main area when no project is selected."""
 
@@ -174,10 +231,12 @@ class EmptyStateView(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         self.title = QLabel()
-        self.title.setStyleSheet("color: #888; font-size: 18px;")
+        self.title.setObjectName("mutedHint")
+        self.title.setStyleSheet("font-size: 18px;")
         self.title.setAlignment(Qt.AlignCenter)
         self.hint = QLabel()
-        self.hint.setStyleSheet("color: #666; font-size: 13px;")
+        self.hint.setObjectName("mutedHint")
+        self.hint.setStyleSheet("font-size: 13px;")
         self.hint.setAlignment(Qt.AlignCenter)
         layout.addStretch()
         layout.addWidget(self.title)
