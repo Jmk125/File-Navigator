@@ -333,7 +333,15 @@ class MainWindow(QMainWindow):
 
     def handle_digit_hotkey(self, digit: int) -> bool:
         pid = self.state.selected_project_id
-        if not pid or pid in self.state.browse_path:
+        if pid is None:
+            # Nothing selected - 1-9 jump to a project instead, matching the
+            # numbers now shown on the sidebar rows.
+            index = digit - 1
+            if 0 <= index < len(self.state.projects):
+                self.on_project_selected(self.state.projects[index]["id"])
+                return True
+            return False
+        if pid in self.state.browse_path:
             return False
         return self.project_view.open_by_hotkey(digit)
 
