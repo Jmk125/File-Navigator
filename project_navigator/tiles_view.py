@@ -1,4 +1,4 @@
-"""Main-area view for a selected project: quick-access folder tiles + recent files."""
+"""Reusable pieces for a project's quick-access folder tiles and recent files."""
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, QSize, Qt, Signal
@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget,
 )
 
-from .icons import FOLDER_ICON, format_relative_time
+from .icons import FOLDER_ICON, format_relative_time, tint
 
 PATH_ROLE = Qt.UserRole
 NAME_ROLE = Qt.UserRole + 1
@@ -55,7 +55,9 @@ class FolderTileDelegate(QStyledItemDelegate):
         if hotkey <= 9:
             badge_rect = QRect(rect.left() + 4, rect.top() + 4, 18, 18)
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor("#000000b0"))
+            badge_bg = QColor(0, 0, 0)
+            badge_bg.setAlpha(176)
+            painter.setBrush(badge_bg)
             painter.drawEllipse(badge_rect)
             painter.setPen(QColor("#ffffff"))
             badge_font = painter.font()
@@ -68,14 +70,18 @@ class FolderTileDelegate(QStyledItemDelegate):
 
 
 class FolderTileList(QListWidget):
+    """A row/grid of quick-access folder tiles. Used both at a project's home
+    view and pinned above the file browser so saved locations are always
+    one click away."""
+
     folderActivated = Signal(str)
     reordered = Signal(list)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, wrap: bool = True):
         super().__init__(parent)
         self.setViewMode(QListView.IconMode)
         self.setFlow(QListView.LeftToRight)
-        self.setWrapping(True)
+        self.setWrapping(wrap)
         self.setResizeMode(QListView.Adjust)
         self.setMovement(QListView.Static)
         self.setDragDropMode(QAbstractItemView.InternalMove)
@@ -86,6 +92,17 @@ class FolderTileList(QListWidget):
         self._delegate = FolderTileDelegate(self)
         self.setItemDelegate(self._delegate)
         self.itemClicked.connect(lambda item: self.folderActivated.emit(item.data(PATH_ROLE)))
+        # The delegate paints its own selection/hover look; suppress the
+        # app-wide QSS selection tint so it doesn't show through as a
+        # mismatched color underneath the tile.
+        self.setStyleSheet(
+            "QListWidget::item { border: none; }"
+            "QListWidget::item:selected, QListWidget::item:hover { background: transparent; }"
+        )
+        if not wrap:
+            self.setFixedHeight(TILE_SIZE.height() + 16)
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
     def set_color(self, color: str) -> None:
         self._delegate.color = color
@@ -118,7 +135,7 @@ class RecentFileRow(QWidget):
         self.path = file_entry["path"]
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 6, 10, 6)
-        self.setStyleSheet(f"background: {color}30; border-radius: 6px;")
+        self.setStyleSheet(f"background: {tint(color, 48)}; border-radius: 6px;")
 
         text = QLabel(f"\U0001F4C4 {file_entry['name']}")
         text.setStyleSheet("font-weight: 500;")
@@ -147,86 +164,26 @@ class RecentFileRow(QWidget):
         super().mousePressEvent(event)
 
     def openRequested(self, path: str) -> None:
-        pass  # overridden per-instance via signal connection from ProjectTilesView
+        pass  # overridden per-instance via signal connection from ProjectView
 
 
-class ProjectTilesView(QWidget):
-    folderActivated = Signal(str)
-    foldersReordered = Signal(list)
-    recentFileOpened = Signal(str)
-    recentFileRemoved = Signal(int)
-    addProjectClicked = Signal()
+class EmptyStateView(QWidget):
+    """Shown in the main area when no project is selected."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.layout_ = QVBoxLayout(self)
-        self.layout_.setContentsMargins(20, 20, 20, 20)
-        self.layout_.setSpacing(16)
+        layout = QVBoxLayout(self)
+        self.title = QLabel()
+        self.title.setStyleSheet("color: #888; font-size: 18px;")
+        self.title.setAlignment(Qt.AlignCenter)
+        self.hint = QLabel()
+        self.hint.setStyleSheet("color: #666; font-size: 13px;")
+        self.hint.setAlignment(Qt.AlignCenter)
+        layout.addStretch()
+        layout.addWidget(self.title)
+        layout.addWidget(self.hint)
+        layout.addStretch()
 
-    def clear(self) -> None:
-        while self.layout_.count():
-            child = self.layout_.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-    def show_empty_state(self) -> None:
-        self._show_placeholder("No projects yet", 'Click "+" in the Projects pane to get started')
-
-    def show_select_prompt(self) -> None:
-        self._show_placeholder("Select a project", "Choose a project on the left to see its quick access folders")
-
-    def _show_placeholder(self, title: str, hint_text: str) -> None:
-        self.clear()
-        label = QLabel(title)
-        label.setStyleSheet("color: #888; font-size: 18px;")
-        label.setAlignment(Qt.AlignCenter)
-        hint = QLabel(hint_text)
-        hint.setStyleSheet("color: #666; font-size: 13px;")
-        hint.setAlignment(Qt.AlignCenter)
-        self.layout_.addStretch()
-        self.layout_.addWidget(label)
-        self.layout_.addWidget(hint)
-        self.layout_.addStretch()
-
-    def show_project(self, project: dict, recent_files: list[dict]) -> None:
-        self.clear()
-        color = project["color"]
-
-        section_title = QLabel("QUICK ACCESS LOCATIONS")
-        section_title.setStyleSheet("color: #aaa; font-size: 12px; font-weight: 600; letter-spacing: 0.5px;")
-        self.layout_.addWidget(section_title)
-
-        folders = project.get("quickFolders", [])
-        if folders:
-            self.tile_list = FolderTileList()
-            self.tile_list.set_color(color)
-            self.tile_list.set_folders(folders)
-            self.tile_list.folderActivated.connect(self.folderActivated)
-            self.tile_list.reordered.connect(self.foldersReordered)
-            row_count = -(-len(folders) // max(1, self.width() // 140)) if self.width() else 1
-            self.tile_list.setMinimumHeight(110 * max(1, row_count))
-            self.layout_.addWidget(self.tile_list)
-        else:
-            empty = QLabel('No quick access locations yet. Toggle "✎" in the Projects pane and click Edit to add some.')
-            empty.setStyleSheet("color: #666; padding: 16px;")
-            empty.setWordWrap(True)
-            self.layout_.addWidget(empty)
-
-        if recent_files:
-            recent_title = QLabel("RECENT FILES")
-            recent_title.setStyleSheet("color: #aaa; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; margin-top: 8px;")
-            self.layout_.addWidget(recent_title)
-
-            for index, entry in enumerate(recent_files):
-                row = RecentFileRow(entry, color)
-                row.openRequested = lambda path, i=index: self.recentFileOpened.emit(path)
-                row.remove_button.clicked.connect(lambda checked=False, i=index: self.recentFileRemoved.emit(i))
-                self.layout_.addWidget(row)
-
-        self.layout_.addStretch()
-
-    def open_by_hotkey(self, digit: int) -> bool:
-        tile_list = getattr(self, "tile_list", None)
-        if tile_list is None:
-            return False
-        return tile_list.open_by_hotkey(digit)
+    def set_text(self, title: str, hint: str) -> None:
+        self.title.setText(title)
+        self.hint.setText(hint)

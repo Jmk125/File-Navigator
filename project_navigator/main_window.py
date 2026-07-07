@@ -11,10 +11,10 @@ from PySide6.QtWidgets import (
 
 from . import storage
 from .dialogs import ProjectDialog, QuickAccessDialog
-from .file_browser_view import FileBrowserView
+from .project_view import ProjectView
 from .sidebar import SidebarWidget
 from .state import NavigatorState
-from .tiles_view import ProjectTilesView
+from .tiles_view import EmptyStateView
 
 TEXT_INPUT_TYPES = (QLineEdit, QPlainTextEdit, QTextEdit)
 
@@ -36,12 +36,12 @@ class MainWindow(QMainWindow):
         self.sidebar.setMinimumWidth(200)
         self.sidebar.setMaximumWidth(360)
 
-        self.tiles_view = ProjectTilesView()
-        self.file_browser_view = FileBrowserView()
+        self.empty_state = EmptyStateView()
+        self.project_view = ProjectView()
 
         self.content_stack = QStackedWidget()
-        self.content_stack.addWidget(self.tiles_view)
-        self.content_stack.addWidget(self.file_browser_view)
+        self.content_stack.addWidget(self.empty_state)
+        self.content_stack.addWidget(self.project_view)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.sidebar)
@@ -69,19 +69,19 @@ class MainWindow(QMainWindow):
         self.sidebar.list.deleteRequested.connect(self.on_delete_project)
         self.sidebar.list.reordered.connect(self.on_projects_reordered)
 
-        self.tiles_view.folderActivated.connect(self.on_folder_activated)
-        self.tiles_view.foldersReordered.connect(self.on_folders_reordered)
-        self.tiles_view.recentFileOpened.connect(self.on_open_file)
-        self.tiles_view.recentFileRemoved.connect(self.on_remove_recent)
+        self.project_view.folderActivated.connect(self.on_folder_activated)
+        self.project_view.foldersReordered.connect(self.on_folders_reordered)
+        self.project_view.recentFileOpened.connect(self.on_open_file)
+        self.project_view.recentFileRemoved.connect(self.on_remove_recent)
 
-        self.file_browser_view.navigateInto.connect(self.on_navigate_into)
-        self.file_browser_view.navigateUp.connect(self.on_navigate_up)
-        self.file_browser_view.navigateBack.connect(self.on_navigate_back)
-        self.file_browser_view.navigateBreadcrumb.connect(self.on_navigate_breadcrumb)
-        self.file_browser_view.closeBrowser.connect(self.on_close_browser)
-        self.file_browser_view.openFile.connect(self.on_open_file)
-        self.file_browser_view.openInExplorer.connect(self.on_open_in_explorer)
-        self.file_browser_view.addToQuickAccess.connect(self.on_add_to_quick_access)
+        self.project_view.navigateInto.connect(self.on_navigate_into)
+        self.project_view.navigateUp.connect(self.on_navigate_up)
+        self.project_view.navigateBack.connect(self.on_navigate_back)
+        self.project_view.navigateBreadcrumb.connect(self.on_navigate_breadcrumb)
+        self.project_view.closeBrowser.connect(self.on_close_browser)
+        self.project_view.openFile.connect(self.on_open_file)
+        self.project_view.openInExplorer.connect(self.on_open_in_explorer)
+        self.project_view.addToQuickAccess.connect(self.on_add_to_quick_access)
 
     # ---- rendering ----------------------------------------------------------------
     def refresh_sidebar(self) -> None:
@@ -90,11 +90,13 @@ class MainWindow(QMainWindow):
     def render_content(self) -> None:
         pid = self.state.selected_project_id
         if pid is None:
-            self.content_stack.setCurrentWidget(self.tiles_view)
+            self.content_stack.setCurrentWidget(self.empty_state)
             if self.state.projects:
-                self.tiles_view.show_select_prompt()
+                self.empty_state.set_text(
+                    "Select a project", "Choose a project on the left to see its quick access folders",
+                )
             else:
-                self.tiles_view.show_empty_state()
+                self.empty_state.set_text("No projects yet", 'Click "+" in the Projects pane to get started')
             return
 
         project = self.state.find_project(pid)
@@ -103,24 +105,24 @@ class MainWindow(QMainWindow):
             self.render_content()
             return
 
-        if pid in self.state.browse_path:
-            self.content_stack.setCurrentWidget(self.file_browser_view)
+        self.content_stack.setCurrentWidget(self.project_view)
+        browsing = pid in self.state.browse_path
+        self.project_view.show_project(project, browsing, self.state.get_recent_files(pid))
+        if browsing:
             self._load_browse_view(pid, project)
         else:
-            self.content_stack.setCurrentWidget(self.tiles_view)
-            self.tiles_view.show_project(project, self.state.get_recent_files(pid))
+            self.project_view.clear_filter()
 
     def _load_browse_view(self, pid: str, project: dict) -> None:
         path = self.state.browse_path[pid]
         history = self.state.browse_history.get(pid, [path])
-        self.file_browser_view.clear_filter()
+        self.project_view.clear_filter()
         try:
             items = storage.list_dir(path)
-            self.file_browser_view.set_data(history, items, project["color"])
+            self.project_view.load_browse_data(history, items, project["color"])
         except OSError as exc:
-            self.file_browser_view.set_data(history, [], project["color"])
-            self.file_browser_view.show_error(str(exc))
-        self.file_browser_view.focus_filter()
+            self.project_view.show_browse_error(history, str(exc), project["color"])
+        self.project_view.focus_filter()
 
     # ---- project actions -----------------------------------------------------------
     def on_add_project(self) -> None:
@@ -172,6 +174,9 @@ class MainWindow(QMainWindow):
 
     def on_project_selected(self, project_id: str) -> None:
         self.state.selected_project_id = project_id
+        # Selecting a project from the sidebar always lands on its home view
+        # (quick access + recents), not wherever you last left off browsing.
+        self.state.close_browser(project_id)
         self.refresh_sidebar()
         self.render_content()
 
@@ -282,8 +287,8 @@ class MainWindow(QMainWindow):
     def handle_escape(self) -> None:
         pid = self.state.selected_project_id
         if pid and pid in self.state.browse_path:
-            if self.file_browser_view.has_filter_text():
-                self.file_browser_view.clear_filter()
+            if self.project_view.has_filter_text():
+                self.project_view.clear_filter()
             else:
                 self.state.close_browser(pid)
                 self.render_content()
@@ -296,7 +301,7 @@ class MainWindow(QMainWindow):
         pid = self.state.selected_project_id
         if not pid or pid in self.state.browse_path:
             return False
-        return self.tiles_view.open_by_hotkey(digit)
+        return self.project_view.open_by_hotkey(digit)
 
     def eventFilter(self, obj, event) -> bool:
         if event.type() == QEvent.Type.KeyPress:
@@ -323,12 +328,12 @@ class MainWindow(QMainWindow):
             if (
                 browsing
                 and not is_text_input
-                and focus_widget is self.file_browser_view.tree
+                and focus_widget is self.project_view.browser.tree
                 and event.text()
                 and event.text().isprintable()
                 and not event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
             ):
-                filter_edit = self.file_browser_view.filter_edit
+                filter_edit = self.project_view.browser.filter_edit
                 filter_edit.setFocus()
                 filter_edit.setText(filter_edit.text() + event.text())
                 return True

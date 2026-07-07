@@ -15,6 +15,15 @@ PATH_ROLE = Qt.UserRole
 IS_DIR_ROLE = Qt.UserRole + 1
 
 
+def _is_light(hex_color: str) -> bool:
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) != 6:
+        return False
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+    luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+    return luminance > 0.6
+
+
 class Breadcrumb(QWidget):
     segmentClicked = Signal(int)
     backClicked = Signal()
@@ -120,6 +129,7 @@ class FileBrowserView(QWidget):
 
     def set_data(self, history: list[str], items: list[dict], color: str) -> None:
         self.breadcrumb.set_history(history)
+        self._apply_header_color(color)
         self.tree.clear()
         for entry in items:
             icon = "\U0001F4C1" if entry["isDirectory"] else file_icon(entry["name"])
@@ -130,6 +140,18 @@ class FileBrowserView(QWidget):
             tree_item.setData(0, IS_DIR_ROLE, entry["isDirectory"])
             self.tree.addTopLevelItem(tree_item)
         self._apply_filter(self.filter_edit.text())
+
+    def _apply_header_color(self, color: str) -> None:
+        text_color = "#1a1a1a" if _is_light(color) else "#ffffff"
+        self.tree.header().setStyleSheet(
+            f"QHeaderView::section {{"
+            f" background-color: {color};"
+            f" color: {text_color};"
+            f" padding: 4px 8px;"
+            f" border: none;"
+            f" font-weight: 600;"
+            f" }}"
+        )
 
     def show_error(self, message: str) -> None:
         self.tree.clear()
