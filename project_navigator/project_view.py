@@ -83,11 +83,15 @@ class ProjectView(QWidget):
             if self.browser.isVisible():
                 self.split.setSizes(self._browse_sizes)
 
-    def show_project(self, project: dict, browsing: bool, recent_files: list[dict]) -> None:
+    def show_project(
+        self, project: dict, browsing: bool, recent_files: list[dict],
+        active_quick_folder_path: str | None = None,
+    ) -> None:
         color = project["color"]
         folders = project.get("quickFolders", [])
 
         self.tile_list.set_color(color)
+        self.tile_list.set_active_path(active_quick_folder_path)
         self.tile_list.set_folders(folders)
         self.tile_list.setVisible(bool(folders))
         self.empty_quick_label.setVisible(not folders)
