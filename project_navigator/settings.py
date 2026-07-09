@@ -27,6 +27,9 @@ DEFAULT_SETTINGS = {
     "theme": "dark",
     "hotkeys": dict(DEFAULT_HOTKEYS),
     "splitter_sizes": [300, 300],
+    "auto_open_single_quick_folder": True,
+    "summon_hotkey_enabled": True,
+    "summon_hotkey": "Ctrl+Alt+F",
 }
 
 
@@ -36,6 +39,9 @@ def load_settings() -> dict:
         "theme": DEFAULT_SETTINGS["theme"],
         "hotkeys": dict(DEFAULT_HOTKEYS),
         "splitter_sizes": list(DEFAULT_SETTINGS["splitter_sizes"]),
+        "auto_open_single_quick_folder": DEFAULT_SETTINGS["auto_open_single_quick_folder"],
+        "summon_hotkey_enabled": DEFAULT_SETTINGS["summon_hotkey_enabled"],
+        "summon_hotkey": DEFAULT_SETTINGS["summon_hotkey"],
     }
     if isinstance(data, dict):
         if data.get("theme") in THEME_NAMES:
@@ -48,6 +54,12 @@ def load_settings() -> dict:
             for action in DEFAULT_HOTKEYS:
                 if action in hotkeys and isinstance(hotkeys[action], str):
                     merged["hotkeys"][action] = hotkeys[action]
+        if isinstance(data.get("auto_open_single_quick_folder"), bool):
+            merged["auto_open_single_quick_folder"] = data["auto_open_single_quick_folder"]
+        if isinstance(data.get("summon_hotkey_enabled"), bool):
+            merged["summon_hotkey_enabled"] = data["summon_hotkey_enabled"]
+        if isinstance(data.get("summon_hotkey"), str) and data["summon_hotkey"].strip():
+            merged["summon_hotkey"] = data["summon_hotkey"]
     return merged
 
 

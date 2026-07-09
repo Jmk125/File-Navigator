@@ -2,6 +2,11 @@
 from __future__ import annotations
 
 import os
+import sys
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QKeySequence
@@ -20,6 +25,36 @@ from .state import NavigatorState
 from .tiles_view import EmptyStateView
 
 TEXT_INPUT_TYPES = (QLineEdit, QPlainTextEdit, QTextEdit)
+HOTKEY_ID_SHOW_HIDE = 0x504E46
+WM_HOTKEY = 0x0312
+
+
+def _windows_hotkey_parts(sequence: str) -> tuple[int, int] | None:
+    if sys.platform != "win32" or not sequence:
+        return None
+    key_sequence = QKeySequence(sequence)
+    if key_sequence.isEmpty():
+        return None
+    combo = key_sequence[0]
+    modifiers = combo.keyboardModifiers()
+    key = combo.key()
+    mod_flags = 0
+    if modifiers & Qt.KeyboardModifier.AltModifier:
+        mod_flags |= 0x0001
+    if modifiers & Qt.KeyboardModifier.ControlModifier:
+        mod_flags |= 0x0002
+    if modifiers & Qt.KeyboardModifier.ShiftModifier:
+        mod_flags |= 0x0004
+    if modifiers & Qt.KeyboardModifier.MetaModifier:
+        mod_flags |= 0x0008
+    if Qt.Key.Key_A <= key <= Qt.Key.Key_Z or Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
+        vk = key
+    else:
+        mapped = {Qt.Key.Key_F1 + i: 0x70 + i for i in range(24)}
+        vk = mapped.get(key)
+    if not vk:
+        return None
+    return mod_flags, int(vk)
 
 
 def _basename(path: str) -> str:
@@ -37,6 +72,7 @@ class MainWindow(QMainWindow):
 
         self.settings = load_settings()
         self.hotkeys = self.settings["hotkeys"]
+        self._registered_hotkey = False
 
         self.sidebar = SidebarWidget()
         self.sidebar.setMinimumWidth(200)
@@ -66,6 +102,7 @@ class MainWindow(QMainWindow):
 
         self.refresh_sidebar()
         self.render_content()
+        self._register_summon_hotkey()
 
     # ---- wiring -----------------------------------------------------------------
     def _connect_signals(self) -> None:
@@ -116,7 +153,10 @@ class MainWindow(QMainWindow):
 
         self.content_stack.setCurrentWidget(self.project_view)
         browsing = pid in self.state.browse_path
-        self.project_view.show_project(project, browsing, self.state.get_recent_files(pid))
+        self.project_view.show_project(
+            project, browsing, self.state.get_recent_files(pid),
+            self._active_quick_folder_path(project) if browsing else None,
+        )
         if browsing:
             self._load_browse_view(pid, project)
         else:
@@ -132,6 +172,29 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             self.project_view.show_browse_error(history, str(exc), project["color"])
         self.project_view.focus_filter()
+
+    def _active_quick_folder_path(self, project: dict) -> str | None:
+        current = self.state.browse_path.get(project["id"])
+        if not current:
+            return None
+        current_norm = storage.normalize_path(current)
+        matches = []
+        for folder in project.get("quickFolders", []):
+            folder_path = storage.normalize_path(folder["path"])
+            folder_prefix = folder_path.rstrip("\\/")
+            if current_norm == folder_path or current_norm.startswith(folder_prefix + "\\") or current_norm.startswith(folder_prefix + "/"):
+                matches.append(folder_path)
+        return max(matches, key=len) if matches else None
+
+    def _open_single_quick_folder_if_enabled(self, project_id: str) -> bool:
+        if not self.settings.get("auto_open_single_quick_folder", True):
+            return False
+        project = self.state.find_project(project_id)
+        folders = project.get("quickFolders", []) if project else []
+        if len(folders) != 1:
+            return False
+        self.state.browse_to(project_id, storage.normalize_path(folders[0]["path"]))
+        return True
 
     # ---- project actions -----------------------------------------------------------
     def on_add_project(self) -> None:
@@ -186,18 +249,29 @@ class MainWindow(QMainWindow):
         # Selecting a project from the sidebar always lands on its home view
         # (quick access + recents), not wherever you last left off browsing.
         self.state.close_browser(project_id)
+        self._open_single_quick_folder_if_enabled(project_id)
         self.refresh_sidebar()
         self.render_content()
+        self._register_summon_hotkey()
 
     # ---- settings ---------------------------------------------------------------------
     def on_open_settings(self) -> None:
-        dialog = SettingsDialog(self, theme=self.settings["theme"], hotkeys=self.hotkeys)
+        dialog = SettingsDialog(
+            self, theme=self.settings["theme"], hotkeys=self.hotkeys,
+            auto_open_single_quick_folder=self.settings.get("auto_open_single_quick_folder", True),
+            summon_hotkey_enabled=self.settings.get("summon_hotkey_enabled", True),
+            summon_hotkey=self.settings.get("summon_hotkey", "Ctrl+Alt+F"),
+        )
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            new_theme, new_hotkeys = dialog.values()
+            new_theme, new_hotkeys, auto_open_single, summon_enabled, summon_hotkey = dialog.values()
             self.settings["theme"] = new_theme
             self.settings["hotkeys"] = new_hotkeys
+            self.settings["auto_open_single_quick_folder"] = auto_open_single
+            self.settings["summon_hotkey_enabled"] = summon_enabled
+            self.settings["summon_hotkey"] = summon_hotkey
             self.hotkeys = new_hotkeys
             save_settings(self.settings)
+            self._register_summon_hotkey()
 
             app = QApplication.instance()
             if app is not None:
@@ -355,7 +429,68 @@ class MainWindow(QMainWindow):
         if self.isFullScreen():
             self.showNormal()
         else:
+            screen = self.screen() or QApplication.screenAt(self.frameGeometry().center())
+            if screen is not None:
+                self.setGeometry(screen.availableGeometry())
             self.showFullScreen()
+            QTimer.singleShot(0, self._fit_fullscreen_to_current_screen)
+
+    def _fit_fullscreen_to_current_screen(self) -> None:
+        if not self.isFullScreen():
+            return
+        screen = self.screen() or QApplication.screenAt(self.frameGeometry().center())
+        if screen is not None:
+            self.setGeometry(screen.geometry())
+
+    def show_or_hide_from_hotkey(self) -> None:
+        if self.isVisible() and self.isActiveWindow():
+            self.hide()
+            return
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def _register_summon_hotkey(self) -> None:
+        if sys.platform != "win32" or self.winId() is None:
+            return
+        hwnd = int(self.winId())
+        if self._registered_hotkey:
+            ctypes.windll.user32.UnregisterHotKey(hwnd, HOTKEY_ID_SHOW_HIDE)
+            self._registered_hotkey = False
+        if not self.settings.get("summon_hotkey_enabled", True):
+            return
+        parts = _windows_hotkey_parts(self.settings.get("summon_hotkey", "Ctrl+Alt+F"))
+        if not parts:
+            return
+        modifiers, vk = parts
+        self._registered_hotkey = bool(ctypes.windll.user32.RegisterHotKey(hwnd, HOTKEY_ID_SHOW_HIDE, modifiers, vk))
+
+    def nativeEvent(self, event_type, message):
+        if sys.platform == "win32":
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID_SHOW_HIDE:
+                self.show_or_hide_from_hotkey()
+                return True, 0
+        return super().nativeEvent(event_type, message)
+
+    def closeEvent(self, event) -> None:
+        reply = QMessageBox.question(
+            self, "Close Project Navigator",
+            "Do you want to exit Project Navigator completely? Choose No to hide it instead.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Cancel:
+            event.ignore()
+            return
+        if reply == QMessageBox.StandardButton.No:
+            event.ignore()
+            self.hide()
+            return
+        if sys.platform == "win32" and self._registered_hotkey:
+            ctypes.windll.user32.UnregisterHotKey(int(self.winId()), HOTKEY_ID_SHOW_HIDE)
+            self._registered_hotkey = False
+        event.accept()
 
     def eventFilter(self, obj, event) -> bool:
         if event.type() == QEvent.Type.KeyPress:
