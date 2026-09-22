@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -86,7 +87,7 @@ class FileBrowserView(QWidget):
         actions_bar.addStretch()
 
         self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText("Type to filter...")
+        self.filter_edit.setPlaceholderText("Type to filter... (* wildcard)")
         self.filter_edit.setFixedWidth(220)
         self.filter_edit.textChanged.connect(self._apply_filter)
         self.filter_edit.installEventFilter(self)
@@ -185,13 +186,25 @@ class FileBrowserView(QWidget):
     def has_filter_text(self) -> bool:
         return bool(self.filter_edit.text())
 
+    @staticmethod
+    def _filter_pattern(needle: str) -> re.Pattern | None:
+        """Build a search pattern from typed text, treating '*' as a
+        multi-character wildcard (e.g. "img*2024*raw" matches a name that
+        contains those three pieces in order with anything in between).
+        Plain text with no '*' behaves as a substring search, same as before."""
+        if not needle:
+            return None
+        parts = [re.escape(part) for part in needle.split("*")]
+        return re.compile(".*".join(parts))
+
     def _apply_filter(self, text: str) -> None:
         needle = text.strip().lower()
+        pattern = self._filter_pattern(needle)
         first_visible_row = -1
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
             name = (item.text(0) or "").lower()
-            hidden = bool(needle) and needle not in name
+            hidden = pattern is not None and not pattern.search(name)
             item.setHidden(hidden)
             if not hidden and first_visible_row == -1:
                 first_visible_row = i
