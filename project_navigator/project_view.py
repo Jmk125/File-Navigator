@@ -15,6 +15,8 @@ class ProjectView(QWidget):
     recentFileOpened = Signal(str)
     recentFileRemoved = Signal(int)
     splitSizesChanged = Signal(list)
+    refreshRequested = Signal()
+    statusMessage = Signal(str, bool)
 
     navigateInto = Signal(str)
     navigateUp = Signal()
@@ -62,6 +64,8 @@ class ProjectView(QWidget):
         self.browser.openFile.connect(self.openFile)
         self.browser.openInExplorer.connect(self.openInExplorer)
         self.browser.addToQuickAccess.connect(self.addToQuickAccess)
+        self.browser.refreshRequested.connect(self.refreshRequested)
+        self.browser.statusMessage.connect(self.statusMessage)
         self.split.addWidget(self.browser)
 
         self.recent_panel = RecentFilesPanel()
