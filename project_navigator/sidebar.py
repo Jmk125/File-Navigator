@@ -1,14 +1,16 @@
 """Left-hand Quick-Access-style pane listing projects."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt, Signal
+import os
+
+from PySide6.QtCore import QSize, QStandardPaths, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QPainter
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QStyle, QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget,
+    QAbstractItemView, QHBoxLayout, QListWidget, QListWidgetItem, QMenu,
+    QStackedWidget, QStyle, QStyledItemDelegate, QToolButton, QVBoxLayout, QWidget,
 )
 
-from . import theme
+from . import storage, theme
 
 NAME_ROLE = Qt.UserRole + 1
 COLOR_ROLE = Qt.UserRole + 2
@@ -181,9 +183,127 @@ class ProjectListWidget(QListWidget):
         self.reordered.emit(ids)
 
 
+_STANDARD_FOLDERS = (
+    ("Home", QStandardPaths.HomeLocation),
+    ("Desktop", QStandardPaths.DesktopLocation),
+    ("Documents", QStandardPaths.DocumentsLocation),
+    ("Downloads", QStandardPaths.DownloadLocation),
+    ("Pictures", QStandardPaths.PicturesLocation),
+    ("Music", QStandardPaths.MusicLocation),
+    ("Videos", QStandardPaths.MoviesLocation),
+)
+
+
+def standard_locations() -> list[tuple[str, str]]:
+    """The fixed Quick Access entries (only folders that actually exist)."""
+    found = []
+    for name, location in _STANDARD_FOLDERS:
+        path = QStandardPaths.writableLocation(location)
+        if path and os.path.isdir(path):
+            found.append((name, os.path.normpath(path)))
+    return found
+
+
+def _same_or_inside(path: str, root: str) -> bool:
+    path, root = os.path.normcase(os.path.normpath(path)), os.path.normcase(os.path.normpath(root))
+    prefix = root.rstrip("\\/") + os.sep
+    return path == root or path.startswith(prefix)
+
+
+class LocationListWidget(QListWidget):
+    """Traditional-view left pane: fixed Quick Access, your own locations, drives."""
+    locationActivated = Signal(str)
+    renameRequested = Signal(str)
+    removeRequested = Signal(str)
+
+    PATH_ROLE = Qt.UserRole
+    CUSTOM_ROLE = Qt.UserRole + 1
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setFrameShape(self.Shape.NoFrame)
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_menu)
+        self.itemClicked.connect(self._on_clicked)
+
+    def _on_clicked(self, item) -> None:
+        path = item.data(self.PATH_ROLE)
+        if path:
+            self.locationActivated.emit(path)
+
+    def _add_header(self, text: str) -> None:
+        item = QListWidgetItem(text)
+        item.setFlags(Qt.NoItemFlags)
+        font = item.font()
+        font.setPointSize(8)
+        font.setBold(True)
+        item.setFont(font)
+        item.setForeground(QColor(theme.current()["MUTED"]))
+        item.setSizeHint(QSize(0, 30))
+        self.addItem(item)
+
+    def _add_location(self, icon: str, name: str, path: str, custom: bool = False) -> None:
+        item = QListWidgetItem(f"{icon}  {name}")
+        item.setData(self.PATH_ROLE, path)
+        item.setData(self.CUSTOM_ROLE, custom)
+        item.setToolTip(path)
+        item.setSizeHint(QSize(0, 32))
+        self.addItem(item)
+
+    def set_locations(self, quick: list, custom: list, drives: list, active_path: str | None) -> None:
+        self.blockSignals(True)
+        self.clear()
+        self._add_header("QUICK ACCESS")
+        for name, path in quick:
+            self._add_location("\U0001F4C1", name, path)
+        if custom:
+            self._add_header("MY LOCATIONS")
+            for loc in custom:
+                is_unc = loc["path"].startswith(("\\\\", "//"))
+                self._add_location("\U0001F310" if is_unc else "\U0001F4C1", loc["name"], loc["path"], custom=True)
+        self._add_header("THIS PC")
+        for drive in drives:
+            self._add_location("\U0001F4BD", drive, drive)
+        self.blockSignals(False)
+        self.set_active(active_path)
+
+    def set_active(self, path: str | None) -> None:
+        """Highlight the most specific location containing `path`."""
+        best, best_len = None, -1
+        for row in range(self.count()):
+            item = self.item(row)
+            root = item.data(self.PATH_ROLE)
+            if path and root and _same_or_inside(path, root) and len(root) > best_len:
+                best, best_len = item, len(root)
+        self.blockSignals(True)
+        if best is not None:
+            self.setCurrentItem(best)
+        else:
+            self.clearSelection()
+            self.setCurrentItem(None)
+        self.blockSignals(False)
+
+    def _show_menu(self, pos) -> None:
+        item = self.itemAt(pos)
+        if item is None or not item.data(self.CUSTOM_ROLE):
+            return
+        path = item.data(self.PATH_ROLE)
+        menu = QMenu(self)
+        rename = menu.addAction("Rename...")
+        remove = menu.addAction("Remove from My Locations")
+        chosen = menu.exec(self.viewport().mapToGlobal(pos))
+        if chosen is rename:
+            self.renameRequested.emit(path)
+        elif chosen is remove:
+            self.removeRequested.emit(path)
+
+
 class SidebarWidget(QWidget):
     addProjectClicked = Signal()
     settingsClicked = Signal()
+    viewToggleClicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -192,14 +312,21 @@ class SidebarWidget(QWidget):
         layout.setSpacing(6)
 
         header = QHBoxLayout()
-        title = QLabel("Projects")
-        title.setObjectName("sectionTitle")
-        header.addWidget(title)
+        # Doubles as the Projects <-> Traditional view switch; styled to look
+        # like the plain section label it replaced.
+        self.title_button = QToolButton()
+        self.title_button.setObjectName("viewToggle")
+        self.title_button.setText("Projects")
+        self.title_button.setToolTip("Click to switch to Traditional view")
+        self.title_button.setCursor(Qt.PointingHandCursor)
+        self.title_button.setAutoRaise(True)
+        self.title_button.clicked.connect(self.viewToggleClicked)
+        header.addWidget(self.title_button)
         header.addStretch()
 
         self.settings_button = QToolButton()
         self.settings_button.setText("⚙")
-        self.settings_button.setToolTip("Settings (theme, hotkeys)")
+        self.settings_button.setToolTip("Settings (theme, hotkeys, view)")
         self.settings_button.setAutoRaise(True)
         self.settings_button.clicked.connect(self.settingsClicked)
         header.addWidget(self.settings_button)
@@ -211,18 +338,37 @@ class SidebarWidget(QWidget):
         self.edit_toggle.setAutoRaise(True)
         header.addWidget(self.edit_toggle)
 
-        add_button = QToolButton()
-        add_button.setText("+")
-        add_button.setToolTip("Add project")
-        add_button.setAutoRaise(True)
-        add_button.clicked.connect(self.addProjectClicked)
-        header.addWidget(add_button)
+        self.add_button = QToolButton()
+        self.add_button.setText("+")
+        self.add_button.setToolTip("Add project")
+        self.add_button.setAutoRaise(True)
+        self.add_button.clicked.connect(self.addProjectClicked)
+        header.addWidget(self.add_button)
 
         layout.addLayout(header)
 
         self.list = ProjectListWidget()
         self.edit_toggle.toggled.connect(self.list.set_edit_mode)
-        layout.addWidget(self.list, 1)
+
+        self.locations = LocationListWidget()
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.list)
+        self.stack.addWidget(self.locations)
+        layout.addWidget(self.stack, 1)
 
     def set_projects(self, projects: list[dict], selected_id: str | None) -> None:
         self.list.set_projects(projects, selected_id)
+
+    def set_locations(self, custom: list, active_path: str | None) -> None:
+        self.locations.set_locations(standard_locations(), custom, storage.list_drives(), active_path)
+
+    def set_mode(self, mode: str) -> None:
+        traditional = mode == "traditional"
+        self.title_button.setText("Traditional" if traditional else "Projects")
+        self.title_button.setToolTip(
+            "Click to switch to Projects view" if traditional else "Click to switch to Traditional view"
+        )
+        self.add_button.setToolTip("Add location" if traditional else "Add project")
+        self.edit_toggle.setVisible(not traditional)
+        self.stack.setCurrentWidget(self.locations if traditional else self.list)

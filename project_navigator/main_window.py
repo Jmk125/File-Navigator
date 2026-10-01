@@ -11,12 +11,13 @@ if sys.platform == "win32":
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import (
-    QApplication, QDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
+    QApplication, QDialog, QInputDialog, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPlainTextEdit, QSplitter, QStackedWidget, QTextEdit,
 )
 
 from . import storage, theme
-from .dialogs import ProjectDialog, QuickAccessDialog
+from .dialogs import TRAD_TARGET, LocationDialog, ProjectDialog, QuickAccessDialog
+from .file_browser_view import FileBrowserView
 from .project_view import ProjectView
 from .settings import load_settings, save_settings
 from .settings_dialog import SettingsDialog
@@ -27,6 +28,11 @@ from .tiles_view import EmptyStateView
 TEXT_INPUT_TYPES = (QLineEdit, QPlainTextEdit, QTextEdit)
 HOTKEY_ID_SHOW_HIDE = 0x504E46
 WM_HOTKEY = 0x0312
+
+# Traditional view reuses NavigatorState's per-project browse state under this
+# reserved key, so all the navigate/back/breadcrumb logic is shared.
+TRAD_KEY = "__traditional__"
+TRAD_COLOR = "#5b6b7f"
 
 
 def _windows_hotkey_parts(sequence: str) -> tuple[int, int] | None:
@@ -73,6 +79,7 @@ class MainWindow(QMainWindow):
         self.settings = load_settings()
         self.hotkeys = self.settings["hotkeys"]
         self._registered_hotkey = False
+        self.mode = "projects"  # always start in Projects; Traditional is opt-in per session
 
         self.sidebar = SidebarWidget()
         self.sidebar.setMinimumWidth(200)
@@ -82,9 +89,14 @@ class MainWindow(QMainWindow):
         self.project_view = ProjectView()
         self.project_view.set_split_sizes(self.settings["splitter_sizes"])
 
+        self.trad_empty = EmptyStateView()
+        self.trad_browser = FileBrowserView()
+
         self.content_stack = QStackedWidget()
         self.content_stack.addWidget(self.empty_state)
         self.content_stack.addWidget(self.project_view)
+        self.content_stack.addWidget(self.trad_empty)
+        self.content_stack.addWidget(self.trad_browser)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self.sidebar)
@@ -106,8 +118,12 @@ class MainWindow(QMainWindow):
 
     # ---- wiring -----------------------------------------------------------------
     def _connect_signals(self) -> None:
-        self.sidebar.addProjectClicked.connect(self.on_add_project)
+        self.sidebar.addProjectClicked.connect(self.on_add_clicked)
         self.sidebar.settingsClicked.connect(self.on_open_settings)
+        self.sidebar.viewToggleClicked.connect(self.toggle_mode)
+        self.sidebar.locations.locationActivated.connect(self.on_location_activated)
+        self.sidebar.locations.renameRequested.connect(self.on_rename_location)
+        self.sidebar.locations.removeRequested.connect(self.on_remove_location)
         self.sidebar.list.projectActivated.connect(self.on_project_selected)
         self.sidebar.list.editRequested.connect(self.on_edit_project)
         self.sidebar.list.duplicateRequested.connect(self.on_duplicate_project)
@@ -131,11 +147,74 @@ class MainWindow(QMainWindow):
         self.project_view.refreshRequested.connect(self.render_content)
         self.project_view.statusMessage.connect(lambda msg, err: self.show_toast(msg, error=err))
 
+        browser = self.trad_browser
+        browser.navigateInto.connect(self.on_navigate_into)
+        browser.navigateUp.connect(self.on_navigate_up)
+        browser.navigateBack.connect(self.on_navigate_back)
+        browser.navigateBreadcrumb.connect(self.on_navigate_breadcrumb)
+        browser.closeBrowser.connect(self.on_close_browser)
+        browser.openFile.connect(self.on_open_file)
+        browser.openInExplorer.connect(self.on_open_in_explorer)
+        browser.addToQuickAccess.connect(self.on_add_to_quick_access)
+        browser.refreshRequested.connect(self.render_content)
+        browser.statusMessage.connect(lambda msg, err: self.show_toast(msg, error=err))
+
     # ---- rendering ----------------------------------------------------------------
     def refresh_sidebar(self) -> None:
         self.sidebar.set_projects(self.state.projects, self.state.selected_project_id)
+        self.sidebar.set_locations(
+            self.settings.get("traditional_locations", []), self.state.browse_path.get(TRAD_KEY),
+        )
+
+    def _nav_key(self) -> str | None:
+        """Key into NavigatorState's browse state for whichever view is active."""
+        return TRAD_KEY if self.mode == "traditional" else self.state.selected_project_id
+
+    def _active_browser(self) -> FileBrowserView:
+        return self.trad_browser if self.mode == "traditional" else self.project_view.browser
+
+    def _trad_trail(self, path: str) -> list[str]:
+        return storage.ancestors(path)
+
+    def _render_traditional(self) -> None:
+        path = self.state.browse_path.get(TRAD_KEY)
+        self.sidebar.locations.set_active(path)
+        if path is None:
+            self.trad_empty.set_text("Traditional view", "Pick a location on the left to start browsing")
+            self.content_stack.setCurrentWidget(self.trad_empty)
+            return
+        self.content_stack.setCurrentWidget(self.trad_browser)
+        self.trad_browser.clear_filter()
+        trail = self._trad_trail(path)
+        try:
+            self.trad_browser.set_data(trail, storage.list_dir(path), TRAD_COLOR)
+        except OSError as exc:
+            self.trad_browser.set_data(trail, [], TRAD_COLOR)
+            self.trad_browser.show_error(str(exc))
+        self.trad_browser.focus_filter()
+
+    # ---- view mode -----------------------------------------------------------------
+    def set_mode(self, mode: str) -> None:
+        if mode == self.mode:
+            return
+        self.mode = mode
+        self.sidebar.set_mode(mode)
+        self.refresh_sidebar()
+        self.render_content()
+
+    def toggle_mode(self) -> None:
+        self.set_mode("projects" if self.mode == "traditional" else "traditional")
+
+    def on_add_clicked(self) -> None:
+        if self.mode == "traditional":
+            self.on_add_location()
+        else:
+            self.on_add_project()
 
     def render_content(self) -> None:
+        if self.mode == "traditional":
+            self._render_traditional()
+            return
         pid = self.state.selected_project_id
         if pid is None:
             self.content_stack.setCurrentWidget(self.empty_state)
@@ -256,6 +335,44 @@ class MainWindow(QMainWindow):
         self.render_content()
         self._register_summon_hotkey()
 
+    # ---- traditional view locations ------------------------------------------------------
+    def on_location_activated(self, path: str) -> None:
+        self.state.browse_to(TRAD_KEY, storage.normalize_path(path))
+        self.render_content()
+
+    def _add_trad_location(self, name: str, path: str) -> bool:
+        locations = self.settings.setdefault("traditional_locations", [])
+        key = os.path.normcase(storage.normalize_path(path))
+        if any(os.path.normcase(storage.normalize_path(loc["path"])) == key for loc in locations):
+            return False
+        locations.append({"name": name, "path": storage.normalize_path(path)})
+        save_settings(self.settings)
+        self.refresh_sidebar()
+        return True
+
+    def on_add_location(self) -> None:
+        dialog = LocationDialog(self, title="Add Location")
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            name, path = dialog.values()
+            if not self._add_trad_location(name, path):
+                self.show_toast("That location is already in My Locations", error=True)
+
+    def on_rename_location(self, path: str) -> None:
+        for loc in self.settings.get("traditional_locations", []):
+            if loc["path"] == path:
+                name, ok = QInputDialog.getText(self, "Rename Location", "Name", text=loc["name"])
+                if ok and name.strip():
+                    loc["name"] = name.strip()
+                    save_settings(self.settings)
+                    self.refresh_sidebar()
+                return
+
+    def on_remove_location(self, path: str) -> None:
+        locations = self.settings.get("traditional_locations", [])
+        self.settings["traditional_locations"] = [loc for loc in locations if loc["path"] != path]
+        save_settings(self.settings)
+        self.refresh_sidebar()
+
     # ---- settings ---------------------------------------------------------------------
     def on_open_settings(self) -> None:
         dialog = SettingsDialog(
@@ -263,9 +380,10 @@ class MainWindow(QMainWindow):
             auto_open_single_quick_folder=self.settings.get("auto_open_single_quick_folder", True),
             summon_hotkey_enabled=self.settings.get("summon_hotkey_enabled", True),
             summon_hotkey=self.settings.get("summon_hotkey", "Ctrl+Alt+F"),
+            view=self.mode,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            new_theme, new_hotkeys, auto_open_single, summon_enabled, summon_hotkey = dialog.values()
+            new_theme, new_hotkeys, auto_open_single, summon_enabled, summon_hotkey, new_view = dialog.values()
             self.settings["theme"] = new_theme
             self.settings["hotkeys"] = new_hotkeys
             self.settings["auto_open_single_quick_folder"] = auto_open_single
@@ -280,6 +398,7 @@ class MainWindow(QMainWindow):
                 theme.apply_theme(app, new_theme)
             # Custom-painted delegates read colors at paint time but won't
             # repaint on their own - force a rebuild so the new theme shows.
+            self.set_mode(new_view)
             self.refresh_sidebar()
             self.render_content()
 
@@ -301,46 +420,63 @@ class MainWindow(QMainWindow):
             self.state.reorder_quick_folders(pid, paths)
 
     def on_navigate_into(self, path: str) -> None:
-        pid = self.state.selected_project_id
-        if not pid:
+        key = self._nav_key()
+        if not key:
             return
-        self.state.navigate_into(pid, path)
+        self.state.navigate_into(key, path)
         self.render_content()
 
     def on_navigate_up(self) -> None:
-        pid = self.state.selected_project_id
-        if not pid:
+        key = self._nav_key()
+        if not key:
             return
-        current = self.state.browse_path.get(pid)
+        current = self.state.browse_path.get(key)
         if not current:
             return
         parent = storage.parent_path(current)
         if parent:
-            self.state.navigate_into(pid, parent)
+            self.state.navigate_into(key, parent)
             self.render_content()
 
     def on_navigate_back(self) -> None:
-        pid = self.state.selected_project_id
-        if pid and self.state.navigate_back(pid):
+        key = self._nav_key()
+        if not key:
+            return
+        if self.state.navigate_back(key):
             self.render_content()
+        elif self.mode == "traditional":
+            # Nothing left in the history stack - step up a level instead, so
+            # the breadcrumb's Back button always does something.
+            self.on_navigate_up()
 
     def on_navigate_breadcrumb(self, index: int) -> None:
-        pid = self.state.selected_project_id
-        if not pid:
+        key = self._nav_key()
+        if not key:
             return
-        self.state.navigate_to_breadcrumb(pid, index)
+        if self.mode == "traditional":
+            # The traditional breadcrumb shows the real folder path, not the
+            # drill-down history, so a segment is an ancestor folder.
+            current = self.state.browse_path.get(key)
+            if not current:
+                return
+            trail = self._trad_trail(current)
+            if 0 <= index < len(trail) - 1:
+                self.state.navigate_into(key, trail[index])
+                self.render_content()
+            return
+        self.state.navigate_to_breadcrumb(key, index)
         self.render_content()
 
     def on_close_browser(self) -> None:
-        pid = self.state.selected_project_id
-        if not pid:
+        key = self._nav_key()
+        if not key:
             return
-        self.state.close_browser(pid)
+        self.state.close_browser(key)
         self.render_content()
 
     def on_open_in_explorer(self) -> None:
-        pid = self.state.selected_project_id
-        path = self.state.browse_path.get(pid) if pid else None
+        key = self._nav_key()
+        path = self.state.browse_path.get(key) if key else None
         if not path:
             self.show_toast("No location currently being browsed", error=True)
             return
@@ -351,17 +487,24 @@ class MainWindow(QMainWindow):
             self.show_toast(f"Error: {exc}", error=True)
 
     def on_add_to_quick_access(self) -> None:
-        pid = self.state.selected_project_id
-        path = self.state.browse_path.get(pid) if pid else None
+        key = self._nav_key()
+        path = self.state.browse_path.get(key) if key else None
         if not path:
             self.show_toast("No location currently being browsed", error=True)
             return
+        traditional = self.mode == "traditional"
         dialog = QuickAccessDialog(
-            self, suggested_name=_basename(path), path=path,
-            projects=self.state.projects, current_project_id=pid,
+            self, suggested_name=_basename(path), path=path, projects=self.state.projects,
+            current_project_id=None if traditional else key, include_traditional=traditional,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             name, target_id = dialog.values()
+            if target_id == TRAD_TARGET:
+                if self._add_trad_location(name, path):
+                    self.show_toast(f'Added "{name}" to My Locations')
+                else:
+                    self.show_toast("This location is already in My Locations", error=True)
+                return
             if not self.state.add_quick_folder(target_id, name, path):
                 self.show_toast("This location is already in quick access for this project", error=True)
                 return
@@ -370,6 +513,13 @@ class MainWindow(QMainWindow):
 
     # ---- files ------------------------------------------------------------------------
     def on_open_file(self, path: str) -> None:
+        if self.mode == "traditional":
+            try:
+                storage.open_path(path)
+                self.show_toast(f"Opening: {_basename(path)}")
+            except Exception as exc:
+                self.show_toast(f"Error: {exc}", error=True)
+            return
         pid = self.state.selected_project_id
         if not pid:
             return
@@ -395,19 +545,21 @@ class MainWindow(QMainWindow):
     # a handful of other actions (back/up/add-to-quick-access) are rebindable
     # via Settings - see settings.DEFAULT_HOTKEYS.
     def handle_escape(self) -> None:
-        pid = self.state.selected_project_id
+        pid = self._nav_key()
         if pid and pid in self.state.browse_path:
-            if self.project_view.has_filter_text():
-                self.project_view.clear_filter()
+            if self._active_browser().has_filter_text():
+                self._active_browser().clear_filter()
             else:
                 self.state.close_browser(pid)
                 self.render_content()
-        elif pid:
+        elif pid and self.mode == "projects":
             self.state.selected_project_id = None
             self.refresh_sidebar()
             self.render_content()
 
     def handle_digit_hotkey(self, digit: int) -> bool:
+        if self.mode == "traditional":
+            return False
         pid = self.state.selected_project_id
         if pid is None:
             # Nothing selected - 1-9 jump to a project instead, matching the
@@ -502,13 +654,18 @@ class MainWindow(QMainWindow):
             key = event.key()
             focus_widget = QApplication.focusWidget()
             is_text_input = isinstance(focus_widget, TEXT_INPUT_TYPES)
-            tree = self.project_view.browser.tree
-            filter_edit = self.project_view.browser.filter_edit
-            pid = self.state.selected_project_id
-            browsing = pid is not None and pid in self.state.browse_path
+            browser = self._active_browser()
+            tree = browser.tree
+            filter_edit = browser.filter_edit
+            key_id = self._nav_key()
+            browsing = key_id is not None and key_id in self.state.browse_path
 
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and event.modifiers() & Qt.KeyboardModifier.AltModifier:
                 self.toggle_fullscreen()
+                return True
+
+            if self._key_matches(event, "toggle_view"):
+                self.toggle_mode()
                 return True
 
             if self._key_matches(event, "back_out"):

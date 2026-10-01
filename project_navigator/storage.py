@@ -67,10 +67,39 @@ def normalize_path(input_path: str) -> str:
 
 def parent_path(path: str) -> str | None:
     """Return the parent directory of path, or None if already at a root."""
-    parent = os.path.dirname(path.rstrip("\\/"))
-    if not parent or parent == path:
+    stripped = path.rstrip("\\/")
+    if len(stripped) == 2 and stripped[1] == ":":
+        return None  # already a drive root such as "C:\\"
+    parent = os.path.dirname(stripped)
+    if not parent or parent == stripped or parent == path:
         return None
+    if len(parent) == 2 and parent[1] == ":":
+        # "C:" alone means "current directory on C:"; the drive root is "C:\\".
+        parent += os.sep
     return parent
+
+
+def ancestors(path: str) -> list[str]:
+    """Return [root, ..., path] - every folder from the drive/share root down to path."""
+    chain = [path]
+    while True:
+        parent = parent_path(chain[0])
+        if not parent or parent in chain:
+            break
+        chain.insert(0, parent)
+    return chain
+
+
+def list_drives() -> list[str]:
+    """Return root paths of local/mapped drives (Windows letters; mount points elsewhere)."""
+    if platform.system() == "Windows":
+        import ctypes
+        mask = ctypes.windll.kernel32.GetLogicalDrives()  # type: ignore[attr-defined]
+        return [f"{chr(65 + i)}:\\" for i in range(26) if mask & (1 << i)]
+    if platform.system() == "Darwin":
+        volumes = Path("/Volumes")
+        return ["/"] + (sorted(str(p) for p in volumes.iterdir()) if volumes.is_dir() else [])
+    return ["/"]
 
 
 def list_dir(dir_path: str) -> list[dict]:

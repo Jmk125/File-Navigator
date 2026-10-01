@@ -7,6 +7,12 @@ A native desktop file navigator built with [PySide6](https://doc.qt.io/qtforpyth
 - **Left pane** - your projects, Windows-Explorer-Quick-Access style. Click a project to see its folders in the main area.
 - **Main area** - either the selected project's quick access folders (as a grid of tiles), or, once you open one, a traditional file browser (breadcrumb, sortable columns, type-to-filter).
 
+## Traditional view
+
+Click **Projects** at the top of the left pane (or press `Ctrl+T`, rebindable in Settings, or pick "Current view" in Settings) to switch to a traditional file-explorer layout: fixed Quick Access (Home, Desktop, Documents, Downloads, ...), **My Locations** you add yourself (local folders or network paths like `\\server\share`; right-click to rename/remove), and **This PC** drives. Click **Traditional** again to switch back. The app always starts in Projects.
+
+In Traditional view the number-key hotkeys are off. `+ Quick Access` (or `+`) adds the current folder either to My Locations or to any project.
+
 ## Key features
 
 - **Type-ahead filtering** - once you're browsing a folder, just start typing; the filter box grabs focus automatically, no need to click into it first.
