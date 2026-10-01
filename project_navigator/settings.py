@@ -1,4 +1,4 @@
-"""Persisted user preferences: theme, hotkeys, splitter layout."""
+"""Persisted user preferences: theme, hotkeys, splitter layout, Traditional-view locations."""
 from __future__ import annotations
 
 from . import storage
@@ -15,12 +15,14 @@ DEFAULT_HOTKEYS = {
     "back_out": "Esc",
     "navigate_back": "Backspace",
     "add_quick_access": "+",
+    "toggle_view": "Ctrl+T",
 }
 
 HOTKEY_LABELS = {
     "back_out": "Back out (clear filter, then close browser, then deselect project)",
     "navigate_back": "Navigate back",
     "add_quick_access": "Add current folder to quick access",
+    "toggle_view": "Switch between Projects and Traditional view",
 }
 
 DEFAULT_SETTINGS = {
@@ -30,6 +32,7 @@ DEFAULT_SETTINGS = {
     "auto_open_single_quick_folder": True,
     "summon_hotkey_enabled": True,
     "summon_hotkey": "Ctrl+Alt+F",
+    "traditional_locations": [],
 }
 
 
@@ -42,6 +45,7 @@ def load_settings() -> dict:
         "auto_open_single_quick_folder": DEFAULT_SETTINGS["auto_open_single_quick_folder"],
         "summon_hotkey_enabled": DEFAULT_SETTINGS["summon_hotkey_enabled"],
         "summon_hotkey": DEFAULT_SETTINGS["summon_hotkey"],
+        "traditional_locations": [],
     }
     if isinstance(data, dict):
         if data.get("theme") in THEME_NAMES:
@@ -60,6 +64,13 @@ def load_settings() -> dict:
             merged["summon_hotkey_enabled"] = data["summon_hotkey_enabled"]
         if isinstance(data.get("summon_hotkey"), str) and data["summon_hotkey"].strip():
             merged["summon_hotkey"] = data["summon_hotkey"]
+        locations = data.get("traditional_locations")
+        if isinstance(locations, list):
+            merged["traditional_locations"] = [
+                {"name": str(loc["name"]), "path": str(loc["path"])}
+                for loc in locations
+                if isinstance(loc, dict) and loc.get("name") and loc.get("path")
+            ]
     return merged
 
 

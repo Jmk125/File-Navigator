@@ -57,6 +57,19 @@ QLabel#sectionTitle {{
     font-weight: 600;
     letter-spacing: 0.5px;
 }}
+QToolButton#viewToggle {{
+    background: transparent;
+    color: {c['MUTED']};
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    padding: 2px 4px;
+    border-radius: 4px;
+}}
+QToolButton#viewToggle:hover {{
+    background: transparent;
+    color: {c['TEXT']};
+}}
 QLabel#mutedHint {{
     color: {c['MUTED']};
     padding: 12px 0;

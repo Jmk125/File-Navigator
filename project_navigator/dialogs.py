@@ -1,4 +1,4 @@
-"""Modal dialogs: add/edit/duplicate project, add current folder to quick access."""
+"""Modal dialogs: add/edit/duplicate project, add current folder to quick access, add location."""
 from __future__ import annotations
 
 import os
@@ -162,8 +162,70 @@ class ProjectDialog(QDialog):
         return self.name_edit.text().strip(), self.color, [dict(f) for f in self.folders]
 
 
+TRAD_TARGET = "__traditional__"
+
+
+class LocationDialog(QDialog):
+    """Name + path for a Traditional-view location (local folder or network path)."""
+
+    def __init__(self, parent=None, title="Add Location", name="", path=""):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(460)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.name_edit = QLineEdit(name)
+        self.name_edit.setPlaceholderText("Estimating Server")
+        form.addRow("Name", self.name_edit)
+
+        path_row = QHBoxLayout()
+        self.path_edit = QLineEdit(path)
+        self.path_edit.setPlaceholderText(r"C:\Folder  or  \\server\share\folder")
+        path_row.addWidget(self.path_edit, 1)
+        browse = QPushButton("Browse...")
+        browse.setAutoDefault(False)
+        browse.clicked.connect(self._browse)
+        path_row.addWidget(browse)
+        form.addRow("Path", path_row)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        save_btn = QPushButton("Save")
+        save_btn.setDefault(True)
+        save_btn.clicked.connect(self._save)
+        buttons.addButton(save_btn, QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Choose a folder", self.path_edit.text().strip())
+        if folder:
+            self.path_edit.setText(os.path.normpath(folder))
+            if not self.name_edit.text().strip():
+                self.name_edit.setText(os.path.basename(folder.rstrip("\\/")) or folder)
+
+    def _save(self) -> None:
+        path = self.path_edit.text().strip()
+        if not path:
+            QMessageBox.warning(self, "Missing path", "Please enter or browse to a folder path")
+            return
+        if not self.name_edit.text().strip():
+            self.name_edit.setText(os.path.basename(path.rstrip("\\/")) or path)
+        self.accept()
+
+    def values(self) -> tuple[str, str]:
+        return self.name_edit.text().strip(), os.path.normpath(self.path_edit.text().strip())
+
+
 class QuickAccessDialog(QDialog):
-    def __init__(self, parent=None, suggested_name="", path="", projects=None, current_project_id=None):
+    """Add a folder to a project's quick access and/or (from Traditional view)
+    to the Traditional view's own My Locations list."""
+
+    def __init__(
+        self, parent=None, suggested_name="", path="", projects=None, current_project_id=None,
+        include_traditional=False,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Add to Quick Access")
         self.setMinimumWidth(420)
@@ -182,8 +244,13 @@ class QuickAccessDialog(QDialog):
         layout.addWidget(QLabel("Path"))
         layout.addWidget(path_label)
 
-        layout.addWidget(QLabel("Add to Project"))
+        layout.addWidget(QLabel("Add to"))
         self.project_list = QListWidget()
+        if include_traditional:
+            trad_item = QListWidgetItem("\u2605 My Locations (Traditional view)")
+            trad_item.setData(Qt.UserRole, TRAD_TARGET)
+            self.project_list.addItem(trad_item)
+            self.project_list.setCurrentItem(trad_item)
         for project in projects or []:
             count = len(project.get("quickFolders", []))
             suffix = " (current)" if project["id"] == current_project_id else ""
@@ -195,7 +262,7 @@ class QuickAccessDialog(QDialog):
         layout.addWidget(self.project_list)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        add_btn = QPushButton("Add to Project")
+        add_btn = QPushButton("Add")
         add_btn.setDefault(True)
         add_btn.clicked.connect(self._save)
         buttons.addButton(add_btn, QDialogButtonBox.ButtonRole.AcceptRole)
@@ -208,7 +275,7 @@ class QuickAccessDialog(QDialog):
             return
         item = self.project_list.currentItem()
         if not item:
-            QMessageBox.warning(self, "No project selected", "Please select a project")
+            QMessageBox.warning(self, "Nothing selected", "Please select where to add this location")
             return
         self.selected_project_id = item.data(Qt.UserRole)
         self.accept()

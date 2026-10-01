@@ -16,7 +16,7 @@ class SettingsDialog(QDialog):
     def __init__(
         self, parent=None, theme: str = "dark", hotkeys: dict | None = None,
         auto_open_single_quick_folder: bool = True, summon_hotkey_enabled: bool = True,
-        summon_hotkey: str = "Ctrl+Alt+F",
+        summon_hotkey: str = "Ctrl+Alt+F", view: str = "projects",
     ):
         super().__init__(parent)
         self.setWindowTitle("Settings")
@@ -32,6 +32,12 @@ class SettingsDialog(QDialog):
         if index >= 0:
             self.theme_combo.setCurrentIndex(index)
         theme_form.addRow("Theme", self.theme_combo)
+
+        self.view_combo = QComboBox()
+        self.view_combo.addItem("Projects", "projects")
+        self.view_combo.addItem("Traditional", "traditional")
+        self.view_combo.setCurrentIndex(max(0, self.view_combo.findData(view)))
+        theme_form.addRow("Current view", self.view_combo)
 
         self.auto_open_single_checkbox = QCheckBox("Automatically open the only quick access folder when selecting a project")
         self.auto_open_single_checkbox.setChecked(auto_open_single_quick_folder)
@@ -110,11 +116,12 @@ class SettingsDialog(QDialog):
             seen[text] = action
         self.accept()
 
-    def values(self) -> tuple[str, dict, bool, bool, str]:
+    def values(self) -> tuple[str, dict, bool, bool, str, str]:
         theme = self.theme_combo.currentData()
         hotkeys = {action: edit.keySequence().toString() for action, edit in self.key_edits.items()}
         return (
             theme, hotkeys, self.auto_open_single_checkbox.isChecked(),
             self.summon_hotkey_enabled_checkbox.isChecked(),
             self.summon_hotkey_edit.keySequence().toString(),
+            self.view_combo.currentData(),
         )
