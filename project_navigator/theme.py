@@ -3,8 +3,11 @@ QPalette + a generated stylesheet. Custom-painted widgets (delegates) can't
 be reached by stylesheets, so they read colors from `current()` at paint time."""
 from __future__ import annotations
 
+import sys
+
+from PySide6.QtCore import QEvent, QObject
 from PySide6.QtGui import QColor, QPalette
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QWidget
 
 THEMES = {
     "dark": dict(
@@ -177,3 +180,69 @@ def apply_theme(app: QApplication, name: str = "dark") -> None:
     palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(c["MUTED"]))
     app.setPalette(palette)
     app.setStyleSheet(_build_stylesheet(c))
+    install_title_bar_styling(app)
+
+
+# ---- native title bar (Windows 10 1809+ / 11) -------------------------------------
+# DWM lets us recolor the caption and square the corners without replacing the
+# native frame, so snapping, resizing and the min/max/close buttons stay intact.
+# Caption/border color and corner attributes need Windows 11; on older builds
+# those calls are ignored and only the dark-mode flag applies.
+_DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+_DWMWA_WINDOW_CORNER_PREFERENCE = 33
+_DWMWA_BORDER_COLOR = 34
+_DWMWA_CAPTION_COLOR = 35
+_DWMWA_TEXT_COLOR = 36
+_DWMWCP_DONOTROUND = 1
+
+
+def _colorref(hex_color: str) -> int:
+    color = QColor(hex_color)
+    return color.red() | (color.green() << 8) | (color.blue() << 16)
+
+
+def style_title_bar(widget: QWidget) -> None:
+    if sys.platform != "win32" or not widget.isWindow():
+        return
+    try:
+        import ctypes
+        from ctypes import byref, c_int, sizeof, windll
+        hwnd = int(widget.winId())
+        c = CURRENT
+
+        def set_attr(attr: int, value: int) -> None:
+            val = c_int(value)
+            windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, byref(val), sizeof(val))
+
+        set_attr(_DWMWA_USE_IMMERSIVE_DARK_MODE, 0 if CURRENT_NAME == "light" else 1)
+        set_attr(_DWMWA_WINDOW_CORNER_PREFERENCE, _DWMWCP_DONOTROUND)
+        set_attr(_DWMWA_CAPTION_COLOR, _colorref(c["BG"]))
+        set_attr(_DWMWA_TEXT_COLOR, _colorref(c["TEXT"]))
+        set_attr(_DWMWA_BORDER_COLOR, _colorref(c["BORDER"]))
+    except Exception:
+        pass  # purely cosmetic; never block the window from showing
+
+
+class _TitleBarStyler(QObject):
+    """Application-wide filter: styles every top-level window (main window and
+    all dialogs) as it is shown, so no individual dialog needs to opt in."""
+
+    def eventFilter(self, obj, event) -> bool:
+        if event.type() == QEvent.Type.Show and isinstance(obj, QWidget) and obj.isWindow():
+            style_title_bar(obj)
+        return False
+
+
+_styler: _TitleBarStyler | None = None
+
+
+def install_title_bar_styling(app: QApplication) -> None:
+    global _styler
+    if sys.platform != "win32":
+        return
+    if _styler is None:
+        _styler = _TitleBarStyler(app)
+        app.installEventFilter(_styler)
+    for widget in app.topLevelWidgets():
+        if widget.isVisible():
+            style_title_bar(widget)
