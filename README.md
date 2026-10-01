@@ -14,6 +14,8 @@ A native desktop file navigator built with [PySide6](https://doc.qt.io/qtforpyth
 - **Number-key hotkeys** - each project's quick access folders are numbered 1-9 (shown as a small badge on the folder icon). Press the number to jump straight in.
 - **Drag to reassign hotkeys** - drag a folder tile to reorder it; its position is its hotkey number.
 - **Inconspicuous management controls** - project cards don't show Edit/Duplicate/Delete by default. Toggle the "✎" button above the project list to reveal them.
+- **File operations** - in the file list: `Ctrl+C` / `Ctrl+X` / `Ctrl+V` (shared with Explorer's clipboard), `Del` (Recycle Bin; `Shift+Del` deletes permanently), `F2` rename, `Ctrl+Shift+N` new folder, plus a right-click menu. Multi-select with Ctrl/Shift-click.
+- **Drag and drop** - drag files out to Explorer or a browser; drop files in from Explorer or a browser's downloads panel (copies; hold `Shift` to move). Dragging within the list moves (hold `Ctrl` to copy); drop on a folder row to put files inside it.
 - Recent files, "Open in Explorer", "Add current folder to quick access", and project duplication all carry over from the original version.
 
 ## Data location

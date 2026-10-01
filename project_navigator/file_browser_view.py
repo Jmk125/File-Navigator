@@ -4,13 +4,15 @@ from __future__ import annotations
 import os
 import re
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QByteArray, QMimeData, QUrl, Qt, Signal
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QPushButton,
-    QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QAbstractItemView, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
+    QMessageBox, QPushButton, QToolButton, QTreeWidget, QTreeWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
-from . import theme
+from . import fileops, theme
 from .icons import darken, file_icon, format_file_size, format_modified
 
 PATH_ROLE = Qt.UserRole
@@ -67,6 +69,68 @@ class Breadcrumb(QWidget):
         self.layout_.addStretch()
 
 
+DROP_EFFECT_MIME = 'application/x-qt-windows-mime;value="Preferred DropEffect"'
+
+
+class FileTree(QTreeWidget):
+    """File list that drags real files out and accepts file drops in."""
+    filesDropped = Signal(list, str, bool)  # source paths, target dir, move?
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.current_dir = ""
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.CopyAction)
+
+    def selected_paths(self) -> list[str]:
+        return [i.data(0, PATH_ROLE) for i in self.selectedItems() if i.data(0, PATH_ROLE)]
+
+    def mimeData(self, items):
+        mime = QMimeData()
+        paths = [i.data(0, PATH_ROLE) for i in items if i.data(0, PATH_ROLE)]
+        mime.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        return mime
+
+    def mimeTypes(self):
+        return ["text/uri-list"]
+
+    def _target_dir(self, event) -> str:
+        item = self.itemAt(event.position().toPoint())
+        if item is not None and item.data(0, IS_DIR_ROLE):
+            return item.data(0, PATH_ROLE)
+        return self.current_dir
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() and self.current_dir:
+            event.acceptProposedAction()
+            item = self.itemAt(event.position().toPoint())
+            self.setCurrentItem(item) if item is not None and item.data(0, IS_DIR_ROLE) else None
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        paths = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()]
+        if not paths or not self.current_dir:
+            event.ignore()
+            return
+        mods = event.modifiers()
+        if event.source() is self:
+            move = not mods & Qt.ControlModifier   # internal drag: move, Ctrl copies
+        else:
+            move = bool(mods & Qt.ShiftModifier)   # from elsewhere: copy, Shift moves
+        event.setDropAction(Qt.MoveAction if move else Qt.CopyAction)
+        event.accept()
+        self.filesDropped.emit(paths, self._target_dir(event), move)
+
+
 class FileBrowserView(QWidget):
     navigateInto = Signal(str)
     navigateUp = Signal()
@@ -76,6 +140,8 @@ class FileBrowserView(QWidget):
     openFile = Signal(str)
     openInExplorer = Signal()
     addToQuickAccess = Signal()
+    refreshRequested = Signal()
+    statusMessage = Signal(str, bool)  # message, is_error
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -122,20 +188,38 @@ class FileBrowserView(QWidget):
         self.breadcrumb.backClicked.connect(self.navigateBack)
         layout.addWidget(self.breadcrumb)
 
-        self.tree = QTreeWidget()
+        self.tree = FileTree()
         self.tree.setColumnCount(3)
         self.tree.setHeaderLabels(["Name", "Size", "Modified"])
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
         self.tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
-        self.tree.setSelectionMode(QTreeWidget.SelectionMode.SingleSelection)
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree.setColumnWidth(0, 380)
         self.tree.itemClicked.connect(self._activate_item)
         self.tree.installEventFilter(self)
+        self.tree.filesDropped.connect(self._on_files_dropped)
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.tree, 1)
+
+        for keys, handler in (
+            (QKeySequence.Copy, lambda: self.copy_selected(cut=False)),
+            (QKeySequence.Cut, lambda: self.copy_selected(cut=True)),
+            (QKeySequence.Paste, self.paste),
+            (QKeySequence(Qt.Key_Delete), lambda: self.delete_selected(permanent=False)),
+            (QKeySequence(Qt.SHIFT | Qt.Key_Delete), lambda: self.delete_selected(permanent=True)),
+            (QKeySequence(Qt.Key_F2), self.rename_selected),
+            (QKeySequence(Qt.CTRL | Qt.SHIFT | Qt.Key_N), self.new_folder),
+            (QKeySequence.SelectAll, self.tree.selectAll),
+        ):
+            shortcut = QShortcut(keys, self.tree)
+            shortcut.setContext(Qt.WidgetShortcut)
+            shortcut.activated.connect(handler)
 
     def set_data(self, history: list[str], items: list[dict], color: str) -> None:
         self.breadcrumb.set_history(history)
+        self.tree.current_dir = history[-1] if history else ""
         self._apply_header_color(color)
         self._apply_selection_style(color)
         self.tree.clear()
@@ -276,3 +360,108 @@ class FileBrowserView(QWidget):
                     self._activate_item(tree.currentItem(), 0)
                 return True
         return super().eventFilter(obj, event)
+
+    # ---- file operations -----------------------------------------------------
+    def _report(self, verb: str, done: int, errors: list[str]) -> None:
+        if errors:
+            self.statusMessage.emit(f"{verb} failed - " + "; ".join(errors[:3]), True)
+        elif done:
+            self.statusMessage.emit(f"{verb}: {done} item{'s' if done != 1 else ''}", False)
+        self.refreshRequested.emit()
+
+    def copy_selected(self, cut: bool) -> None:
+        paths = self.tree.selected_paths()
+        if not paths:
+            return
+        mime = self.tree.mimeData(self.tree.selectedItems())
+        # Windows convention: DropEffect 2 = cut (move on paste), 5 = copy.
+        mime.setData(DROP_EFFECT_MIME, QByteArray((2 if cut else 5).to_bytes(4, "little")))
+        QGuiApplication.clipboard().setMimeData(mime)
+        self.statusMessage.emit(f"{'Cut' if cut else 'Copied'} {len(paths)} item(s)", False)
+
+    def paste(self) -> None:
+        mime = QGuiApplication.clipboard().mimeData()
+        if mime is None or not mime.hasUrls() or not self.tree.current_dir:
+            return
+        paths = [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
+        if not paths:
+            return
+        move = False
+        if mime.hasFormat(DROP_EFFECT_MIME):
+            data = bytes(mime.data(DROP_EFFECT_MIME))
+            move = bool(data) and int.from_bytes(data[:4], "little") & 2 == 2
+        done, errors = fileops.transfer(paths, self.tree.current_dir, move)
+        if move and done and not errors:
+            QGuiApplication.clipboard().clear()
+        self._report("Moved" if move else "Pasted", done, errors)
+
+    def delete_selected(self, permanent: bool) -> None:
+        paths = self.tree.selected_paths()
+        if not paths:
+            return
+        names = ", ".join(os.path.basename(p) for p in paths[:3]) + ("..." if len(paths) > 3 else "")
+        action = "Permanently delete" if permanent else "Move to Recycle Bin"
+        answer = QMessageBox.question(
+            self, "Delete", f"{action} {len(paths)} item(s)?\n\n{names}",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        done, errors = fileops.trash(paths, permanent)
+        self._report("Deleted", done, errors)
+
+    def rename_selected(self) -> None:
+        paths = self.tree.selected_paths()
+        if len(paths) != 1:
+            return
+        old = os.path.basename(paths[0])
+        new, ok = QInputDialog.getText(self, "Rename", "New name:", text=old)
+        if not ok or not new or new == old:
+            return
+        try:
+            fileops.rename(paths[0], new)
+            self._report("Renamed", 1, [])
+        except OSError as exc:
+            self._report("Rename", 0, [f"{old}: {exc}"])
+
+    def new_folder(self) -> None:
+        if not self.tree.current_dir:
+            return
+        name, ok = QInputDialog.getText(self, "New folder", "Folder name:", text="New folder")
+        if not ok or not name:
+            return
+        try:
+            fileops.make_folder(self.tree.current_dir, name)
+            self._report("Created", 1, [])
+        except OSError as exc:
+            self._report("Create folder", 0, [str(exc)])
+
+    def _on_files_dropped(self, paths: list, target: str, move: bool) -> None:
+        done, errors = fileops.transfer(paths, target, move)
+        self._report("Moved" if move else "Copied", done, errors)
+
+    def _show_context_menu(self, pos) -> None:
+        item = self.tree.itemAt(pos)
+        if item is not None and not item.isSelected():
+            self.tree.setCurrentItem(item)
+        has_sel = bool(self.tree.selected_paths())
+        menu = QMenu(self)
+        entries = [
+            ("Cut", "Ctrl+X", lambda: self.copy_selected(True), has_sel),
+            ("Copy", "Ctrl+C", lambda: self.copy_selected(False), has_sel),
+            ("Paste", "Ctrl+V", self.paste, True),
+            None,
+            ("Rename", "F2", self.rename_selected, len(self.tree.selected_paths()) == 1),
+            ("Delete", "Del", lambda: self.delete_selected(False), has_sel),
+            None,
+            ("New folder", "Ctrl+Shift+N", self.new_folder, True),
+        ]
+        for entry in entries:
+            if entry is None:
+                menu.addSeparator()
+                continue
+            label, hint, handler, enabled = entry
+            action = QAction(f"{label}\t{hint}", menu)
+            action.setEnabled(enabled)
+            action.triggered.connect(handler)
+            menu.addAction(action)
+        menu.exec(self.tree.viewport().mapToGlobal(pos))

@@ -128,6 +128,8 @@ class MainWindow(QMainWindow):
         self.project_view.openFile.connect(self.on_open_file)
         self.project_view.openInExplorer.connect(self.on_open_in_explorer)
         self.project_view.addToQuickAccess.connect(self.on_add_to_quick_access)
+        self.project_view.refreshRequested.connect(self.render_content)
+        self.project_view.statusMessage.connect(lambda msg, err: self.show_toast(msg, error=err))
 
     # ---- rendering ----------------------------------------------------------------
     def refresh_sidebar(self) -> None:
