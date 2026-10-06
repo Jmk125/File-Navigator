@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import os
+import threading
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from . import fileops
+from . import file_locks, fileops
 
 RETRY_MS = 1500
 
@@ -18,6 +19,7 @@ class PendingDeletes(QObject):
     changed = Signal()
     deleted = Signal(str)       # path
     failed = Signal(str, str)   # path, message
+    closeFailed = Signal(str)   # message: the program holding the file wouldn't close it
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -26,10 +28,18 @@ class PendingDeletes(QObject):
         self._timer.setInterval(RETRY_MS)
         self._timer.timeout.connect(self._retry)
 
-    def add(self, path: str, permanent: bool) -> None:
+    def add(self, path: str, permanent: bool, close: bool = False) -> None:
+        """Schedule path for deletion once it's closed; close=True also asks the holder to close it."""
         self._items[_key(path)] = (path, permanent)
         self._timer.start()
         self.changed.emit()
+        if close:
+            threading.Thread(target=self._close_holders, args=(path,), daemon=True).start()
+
+    def _close_holders(self, path: str) -> None:
+        ok, message = file_locks.close_holders(path)  # may block while the program shuts down
+        if not ok and message:
+            self.closeFailed.emit(message)
 
     def cancel(self, path: str) -> None:
         if self._items.pop(_key(path), None) is not None:
