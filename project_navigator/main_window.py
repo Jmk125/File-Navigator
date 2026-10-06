@@ -162,6 +162,7 @@ class MainWindow(QMainWindow):
 
         self.pending = pending_deletes.get_manager()
         self.pending.deleted.connect(self._on_pending_deleted)
+        self.pending.closeFailed.connect(lambda msg: self.show_toast(msg, error=True))
         self.pending.failed.connect(lambda _path, msg: self.show_toast(f"Delete failed - {msg}", error=True))
 
     # ---- rendering ----------------------------------------------------------------

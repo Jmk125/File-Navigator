@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import fileops, pending_deletes, theme
+from . import file_locks, fileops, pending_deletes, theme
 from .icons import darken, file_icon, format_file_size, format_modified
 
 PATH_ROLE = Qt.UserRole
@@ -436,22 +436,28 @@ class FileBrowserView(QWidget):
 
     def _offer_delete_when_closed(self, locked: list[str], permanent: bool) -> None:
         names = ", ".join(os.path.basename(p) for p in locked[:3]) + ("..." if len(locked) > 3 else "")
+        apps = sorted({name for p in locked for name, _t in file_locks.holders(p)})
+        held_by = f" ({', '.join(apps)})" if apps else ""
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle("File is open")
         box.setText(
-            f"{names} {'is' if len(locked) == 1 else 'are'} open in another program.\n\n"
+            f"{names} {'is' if len(locked) == 1 else 'are'} open in another program{held_by}.\n\n"
             "Delete automatically once closed?"
         )
         yes = box.addButton("&Yes", QMessageBox.ButtonRole.YesRole)
+        close = box.addButton("&Close and delete", QMessageBox.ButtonRole.AcceptRole) \
+            if file_locks.available() else None
         no = box.addButton("&No", QMessageBox.ButtonRole.NoRole)
         box.setDefaultButton(yes)
         box.setEscapeButton(no)
         box.exec()
-        if box.clickedButton() is yes:
+        clicked = box.clickedButton()
+        if clicked is yes or (close is not None and clicked is close):
             for path in locked:
-                self.pending.add(path, permanent)
-            self.statusMessage.emit(f"Will delete {len(locked)} item(s) when closed", False)
+                self.pending.add(path, permanent, close=clicked is close)
+            verb = "Closing and deleting" if clicked is close else "Will delete"
+            self.statusMessage.emit(f"{verb} {len(locked)} item(s)" + ("" if clicked is close else " when closed"), False)
 
     def rename_selected(self) -> None:
         paths = self.tree.selected_paths()
