@@ -21,6 +21,7 @@ In Traditional view the number-key hotkeys are off. `+ Quick Access` (or `+`) ad
 - **Drag to reassign hotkeys** - drag a folder tile to reorder it; its position is its hotkey number.
 - **Inconspicuous management controls** - project cards don't show Edit/Duplicate/Delete by default. Toggle the "✎" button above the project list to reveal them.
 - **File operations** - in the file list: `Ctrl+C` / `Ctrl+X` / `Ctrl+V` (shared with Explorer's clipboard), `Del` (Recycle Bin; `Shift+Del` deletes permanently), `F2` rename, `Ctrl+Shift+N` new folder, plus a right-click menu. Multi-select with Ctrl/Shift-click.
+- **Delete when closed** - if a file is open in another program, deleting it offers to remove it automatically once it's closed (`Y`/`N`). Pending files show a red "Deletes when closed" tag in the list; click it (or right-click > Cancel scheduled delete) to cancel. Exiting with pending deletes asks for confirmation, since they only run while the app is open.
 - **Drag and drop** - drag files out to Explorer or a browser; drop files in from Explorer or a browser's downloads panel (copies; hold `Shift` to move). Dragging within the list moves (hold `Ctrl` to copy); drop on a folder row to put files inside it.
 - Recent files, "Open in Explorer", "Add current folder to quick access", and project duplication all carry over from the original version.
 

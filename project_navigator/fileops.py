@@ -52,23 +52,48 @@ def transfer(sources: list[str], dest_dir: str, move: bool) -> tuple[int, list[s
     return done, errors
 
 
-def trash(paths: list[str], permanent: bool = False) -> tuple[int, list[str]]:
-    """Send paths to the Recycle Bin / Trash (or delete for good if permanent)."""
+def delete_one(path: str, permanent: bool) -> None:
+    """Delete a single path (Recycle Bin unless permanent). Raises on failure."""
+    if permanent:
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path)
+        else:
+            os.remove(path)
+    else:
+        from send2trash import send2trash
+        send2trash(os.path.normpath(path))
+
+
+def is_locked_error(path: str, exc: Exception) -> bool:
+    """True if exc looks like "another program has this open" rather than a real failure."""
+    if not os.path.lexists(path):
+        return False
+    if getattr(exc, "winerror", None) in (5, 32, 33):  # access denied / sharing / lock violation
+        return True
+    return isinstance(exc, PermissionError) or "being used by another process" in str(exc)
+
+
+def trash_split(paths: list[str], permanent: bool = False) -> tuple[int, list[str], list[str]]:
+    """Like trash(), but also returns the paths that failed only because they're open elsewhere."""
     done = 0
     errors: list[str] = []
+    locked: list[str] = []
     for path in paths:
         try:
-            if permanent:
-                if os.path.isdir(path) and not os.path.islink(path):
-                    shutil.rmtree(path)
-                else:
-                    os.remove(path)
-            else:
-                from send2trash import send2trash
-                send2trash(os.path.normpath(path))
+            delete_one(path, permanent)
             done += 1
         except Exception as exc:  # send2trash raises its own error types
-            errors.append(f"{os.path.basename(path)}: {exc}")
+            if is_locked_error(path, exc):
+                locked.append(path)
+            else:
+                errors.append(f"{os.path.basename(path)}: {exc}")
+    return done, errors, locked
+
+
+def trash(paths: list[str], permanent: bool = False) -> tuple[int, list[str]]:
+    """Send paths to the Recycle Bin / Trash (or delete for good if permanent)."""
+    done, errors, locked = trash_split(paths, permanent)
+    errors += [f"{os.path.basename(p)}: in use by another program" for p in locked]
     return done, errors
 
 

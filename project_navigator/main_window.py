@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from . import storage, theme
 from .dialogs import TRAD_TARGET, LocationDialog, ProjectDialog, QuickAccessDialog
 from .file_browser_view import FileBrowserView
+from . import pending_deletes
 from .project_view import ProjectView
 from .settings import load_settings, save_settings
 from .settings_dialog import SettingsDialog
@@ -158,6 +159,10 @@ class MainWindow(QMainWindow):
         browser.addToQuickAccess.connect(self.on_add_to_quick_access)
         browser.refreshRequested.connect(self.render_content)
         browser.statusMessage.connect(lambda msg, err: self.show_toast(msg, error=err))
+
+        self.pending = pending_deletes.get_manager()
+        self.pending.deleted.connect(self._on_pending_deleted)
+        self.pending.failed.connect(lambda _path, msg: self.show_toast(f"Delete failed - {msg}", error=True))
 
     # ---- rendering ----------------------------------------------------------------
     def refresh_sidebar(self) -> None:
@@ -627,6 +632,10 @@ class MainWindow(QMainWindow):
                 return True, 0
         return super().nativeEvent(event_type, message)
 
+    def _on_pending_deleted(self, path: str) -> None:
+        self.show_toast(f"Deleted {os.path.basename(path)} (it was closed)")
+        self.render_content()
+
     def closeEvent(self, event) -> None:
         reply = QMessageBox.question(
             self, "Close Project Navigator",
@@ -641,6 +650,20 @@ class MainWindow(QMainWindow):
             event.ignore()
             self.hide()
             return
+        if self.pending.count():
+            n = self.pending.count()
+            names = ", ".join(os.path.basename(p) for p in self.pending.paths()[:3])
+            confirm = QMessageBox.warning(
+                self, "Pending deletes",
+                f"{n} file{'s are' if n != 1 else ' is'} still waiting to be deleted once closed "
+                f"({names}{'...' if n > 3 else ''}).\n\nIf you exit now, "
+                f"{'they' if n != 1 else 'it'} will NOT be deleted. Exit anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if confirm != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         if sys.platform == "win32" and self._registered_hotkey:
             ctypes.windll.user32.UnregisterHotKey(int(self.winId()), HOTKEY_ID_SHOW_HIDE)
             self._registered_hotkey = False
