@@ -54,7 +54,7 @@ python app.py
 Double-click `build-exe.bat`, or run:
 
 ```bash
-pyinstaller --onefile --windowed --name "Project Navigator" app.py
+pyinstaller --onefile --collect-submodules send2trash --windowed --name "Project Navigator" app.py
 ```
 
 The executable will be created at `dist\Project Navigator.exe`. Make a desktop shortcut to it.
