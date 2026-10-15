@@ -12,11 +12,13 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from . import fileops, theme
+from . import file_locks, fileops, pending_deletes, theme
 from .icons import darken, file_icon, format_file_size, format_modified
 
 PATH_ROLE = Qt.UserRole
 IS_DIR_ROLE = Qt.UserRole + 1
+PENDING_COLUMN = 3
+PENDING_TEXT = "⏳ Deletes when closed — click to cancel"
 
 
 def _is_light(hex_color: str) -> bool:
@@ -262,8 +264,8 @@ class FileBrowserView(QWidget):
         layout.addWidget(self.breadcrumb)
 
         self.tree = FileTree()
-        self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["Name", "Size", "Modified"])
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(["Name", "Size", "Modified", ""])
         self.tree.setRootIsDecorated(False)
         self.tree.setUniformRowHeights(True)
         self.tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
@@ -275,6 +277,9 @@ class FileBrowserView(QWidget):
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.tree, 1)
+
+        self.pending = pending_deletes.get_manager()
+        self.pending.changed.connect(self._refresh_pending_marks)
 
         for keys, handler in (
             (QKeySequence.Copy, lambda: self.copy_selected(cut=False)),
@@ -300,11 +305,25 @@ class FileBrowserView(QWidget):
             icon = "\U0001F4C1" if entry["isDirectory"] else file_icon(entry["name"])
             size_str = "" if entry["isDirectory"] else format_file_size(entry["size"])
             modified_str = format_modified(entry["modified"]) if entry.get("modified") else ""
-            tree_item = QTreeWidgetItem([f"{icon}  {entry['name']}", size_str, modified_str])
+            tree_item = QTreeWidgetItem([f"{icon}  {entry['name']}", size_str, modified_str, ""])
             tree_item.setData(0, PATH_ROLE, entry["path"])
             tree_item.setData(0, IS_DIR_ROLE, entry["isDirectory"])
             self.tree.addTopLevelItem(tree_item)
+        self._refresh_pending_marks()
         self._apply_filter(self.filter_edit.text())
+
+    def _refresh_pending_marks(self) -> None:
+        """Tag rows whose delete is waiting on the file being closed."""
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            path = item.data(0, PATH_ROLE)
+            marked = bool(path) and self.pending.is_pending(path)
+            item.setText(PENDING_COLUMN, PENDING_TEXT if marked else "")
+            for col in range(self.tree.columnCount()):
+                item.setForeground(col, QBrush(QColor("#c42b1c")) if marked else QBrush())
+                font = item.font(col)
+                font.setStrikeOut(marked and col == 0)
+                item.setFont(col, font)
 
     def _apply_header_color(self, color: str) -> None:
         text_color = "#1a1a1a" if _is_light(color) else "#ffffff"
@@ -381,6 +400,10 @@ class FileBrowserView(QWidget):
         path = item.data(0, PATH_ROLE)
         is_dir = item.data(0, IS_DIR_ROLE)
         if path is None:
+            return
+        if _column == PENDING_COLUMN and self.pending.is_pending(path):
+            self.pending.cancel(path)
+            self.statusMessage.emit(f"Cancelled scheduled delete: {os.path.basename(path)}", False)
             return
         if is_dir:
             self.navigateInto.emit(path)
@@ -482,8 +505,35 @@ class FileBrowserView(QWidget):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        done, errors = fileops.trash(paths, permanent)
+        done, errors, locked = fileops.trash_split(paths, permanent)
+        if locked:
+            self._offer_delete_when_closed(locked, permanent)
         self._report("Deleted", done, errors)
+
+    def _offer_delete_when_closed(self, locked: list[str], permanent: bool) -> None:
+        names = ", ".join(os.path.basename(p) for p in locked[:3]) + ("..." if len(locked) > 3 else "")
+        apps = sorted({name for p in locked for name, _t in file_locks.holders(p)})
+        held_by = f" ({', '.join(apps)})" if apps else ""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("File is open")
+        box.setText(
+            f"{names} {'is' if len(locked) == 1 else 'are'} open in another program{held_by}.\n\n"
+            "Delete automatically once closed?"
+        )
+        yes = box.addButton("&Yes", QMessageBox.ButtonRole.YesRole)
+        close = box.addButton("&Close and delete", QMessageBox.ButtonRole.AcceptRole) \
+            if file_locks.available() else None
+        no = box.addButton("&No", QMessageBox.ButtonRole.NoRole)
+        box.setDefaultButton(yes)
+        box.setEscapeButton(no)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is yes or (close is not None and clicked is close):
+            for path in locked:
+                self.pending.add(path, permanent, close=clicked is close)
+            verb = "Closing and deleting" if clicked is close else "Will delete"
+            self.statusMessage.emit(f"{verb} {len(locked)} item(s)" + ("" if clicked is close else " when closed"), False)
 
     def rename_selected(self) -> None:
         paths = self.tree.selected_paths()
@@ -528,6 +578,14 @@ class FileBrowserView(QWidget):
             None,
             ("Rename", "F2", self.rename_selected, len(self.tree.selected_paths()) == 1),
             ("Delete", "Del", lambda: self.delete_selected(False), has_sel),
+        ]
+        selected = self.tree.selected_paths()
+        if any(self.pending.is_pending(p) for p in selected):
+            entries.append((
+                "Cancel scheduled delete", "",
+                lambda: [self.pending.cancel(p) for p in self.tree.selected_paths()], True,
+            ))
+        entries += [
             None,
             ("New folder", "Ctrl+Shift+N", self.new_folder, True),
         ]
