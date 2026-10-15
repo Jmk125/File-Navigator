@@ -688,12 +688,14 @@ class MainWindow(QMainWindow):
                 self.on_add_to_quick_access()
                 return True
 
-            # Type-ahead: if browsing and the file list (not a text box) has focus,
-            # forward the first keystroke to the filter box instead of requiring a click.
+            # Type-ahead: if browsing and keyboard focus is anywhere other than a
+            # text box (the file list, a sidebar button, ...), forward the
+            # keystroke to the filter box instead of requiring a click.
             if (
                 browsing
                 and not is_text_input
-                and focus_widget is tree
+                and self.isActiveWindow()
+                and QApplication.activePopupWidget() is None
                 and event.text()
                 and event.text().isprintable()
                 and not event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)

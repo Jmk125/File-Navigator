@@ -320,6 +320,7 @@ class SidebarWidget(QWidget):
         self.title_button.setToolTip("Click to switch to Traditional view")
         self.title_button.setCursor(Qt.PointingHandCursor)
         self.title_button.setAutoRaise(True)
+        self.title_button.setFocusPolicy(Qt.NoFocus)  # never steal typing focus from the filter box
         self.title_button.clicked.connect(self.viewToggleClicked)
         header.addWidget(self.title_button)
         header.addStretch()

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 
-from PySide6.QtCore import QByteArray, QMimeData, QPoint, QRect, QUrl, Qt, Signal
+from PySide6.QtCore import QByteArray, QMimeData, QPoint, QRect, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
@@ -336,6 +336,13 @@ class FileBrowserView(QWidget):
 
     def focus_filter(self) -> None:
         self.filter_edit.setFocus()
+        # Re-assert once the click/keypress that triggered this has finished
+        # being processed, in case something grabbed focus back meanwhile.
+        QTimer.singleShot(0, self._refocus_filter)
+
+    def _refocus_filter(self) -> None:
+        if self.isVisible() and not isinstance(QApplication.focusWidget(), QLineEdit):
+            self.filter_edit.setFocus()
 
     def clear_filter(self) -> None:
         self.filter_edit.clear()
