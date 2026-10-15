@@ -4,11 +4,11 @@ from __future__ import annotations
 import os
 import re
 
-from PySide6.QtCore import QByteArray, QMimeData, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QShortcut
+from PySide6.QtCore import QByteArray, QMimeData, QPoint, QRect, QUrl, Qt, Signal
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
-    QMessageBox, QPushButton, QToolButton, QTreeWidget, QTreeWidgetItem,
+    QAbstractItemView, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
+    QMessageBox, QPushButton, QRubberBand, QToolButton, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 
@@ -83,9 +83,82 @@ class FileTree(QTreeWidget):
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.CopyAction)
+        # Rows span the full width, so Qt never sees an "empty" spot to start a
+        # rubber band from. We draw our own: pressing on a file's name still
+        # drags the file, pressing anywhere else on the row/blank area lassos.
+        self._band = QRubberBand(QRubberBand.Shape.Rectangle, self.viewport())
+        self._band_origin: QPoint | None = None   # in scrolled content coordinates
+        self._band_press: QMouseEvent | None = None
+        self._band_active = False
+        self._band_base: set[int] = set()
 
     def selected_paths(self) -> list[str]:
         return [i.data(0, PATH_ROLE) for i in self.selectedItems() if i.data(0, PATH_ROLE)]
+
+    def _scroll_offset(self) -> QPoint:
+        return QPoint(self.horizontalScrollBar().value(), self.verticalScrollBar().value())
+
+    def _on_name_text(self, pos: QPoint) -> bool:
+        """True if pos is over a row's icon/name text (the part you drag files by)."""
+        item = self.itemAt(pos)
+        if item is None:
+            return False
+        rect = self.visualRect(self.indexFromItem(item, 0))
+        text_right = rect.left() + 8 + self.fontMetrics().horizontalAdvance(item.text(0)) + 8
+        return rect.left() <= pos.x() <= text_right
+
+    def mousePressEvent(self, event):
+        pos = event.position().toPoint()
+        if event.button() == Qt.LeftButton and not self._on_name_text(pos):
+            self.setFocus()
+            self._band_origin = pos + self._scroll_offset()
+            self._band_press = QMouseEvent(event)
+            self._band_active = False
+            self._band_base = {
+                id(self.topLevelItem(i)) for i in range(self.topLevelItemCount())
+                if self.topLevelItem(i).isSelected()
+            } if event.modifiers() & Qt.ControlModifier else set()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._band_origin is None:
+            super().mouseMoveEvent(event)
+            return
+        pos = event.position().toPoint()
+        origin = self._band_origin - self._scroll_offset()
+        if not self._band_active:
+            if (pos - origin).manhattanLength() < QApplication.startDragDistance():
+                return
+            self._band_active = True
+            self._band.show()
+        rect = QRect(origin, pos).normalized().intersected(self.viewport().rect())
+        self._band.setGeometry(rect)
+        for i in range(self.topLevelItemCount()):
+            item = self.topLevelItem(i)
+            hit = not item.isHidden() and self.visualItemRect(item).intersects(rect)
+            want = hit or id(item) in self._band_base
+            if item.isSelected() != want:
+                item.setSelected(want)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):
+        if self._band_origin is None:
+            super().mouseReleaseEvent(event)
+            return
+        press, was_band = self._band_press, self._band_active
+        self._band_origin = self._band_press = None
+        self._band_active = False
+        self._band.hide()
+        if was_band:
+            event.accept()
+            return
+        # No drag happened: it was a plain click, so replay it normally (selects
+        # the row, honours Ctrl/Shift, and fires itemClicked to open it).
+        if press is not None:
+            super().mousePressEvent(press)
+        super().mouseReleaseEvent(event)
 
     def mimeData(self, items):
         mime = QMimeData()
@@ -302,6 +375,9 @@ class FileBrowserView(QWidget):
                 self.tree.setCurrentItem(None)
 
     def _activate_item(self, item: QTreeWidgetItem, _column: int) -> None:
+        # Ctrl/Shift-click is multi-select, not "open this".
+        if QApplication.keyboardModifiers() & (Qt.ControlModifier | Qt.ShiftModifier):
+            return
         path = item.data(0, PATH_ROLE)
         is_dir = item.data(0, IS_DIR_ROLE)
         if path is None:
