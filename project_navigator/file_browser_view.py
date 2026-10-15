@@ -5,7 +5,7 @@ import os
 import re
 
 from PySide6.QtCore import QByteArray, QMimeData, QPoint, QRect, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QAction, QGuiApplication, QKeySequence, QMouseEvent, QShortcut
+from PySide6.QtGui import QAction, QBrush, QColor, QGuiApplication, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
     QMessageBox, QPushButton, QRubberBand, QToolButton, QTreeWidget, QTreeWidgetItem,
