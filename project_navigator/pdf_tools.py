@@ -1,7 +1,10 @@
 """PDF merge/insert helpers and the dialogs that ask for ordering and position."""
 from __future__ import annotations
 
+import contextlib
 import os
+import shutil
+import sys
 import tempfile
 
 from PySide6.QtCore import Qt
@@ -13,8 +16,78 @@ from PySide6.QtWidgets import (
 from .fileops import unique_destination
 
 
+WORD_EXTS = (".doc", ".docx", ".rtf")
+EXCEL_EXTS = (".xls", ".xlsx", ".xlsm", ".xlsb")
+
+
 def is_pdf(path: str) -> bool:
     return path.lower().endswith(".pdf") and os.path.isfile(path)
+
+
+def is_mergeable(path: str) -> bool:
+    """A PDF, or a Word/Excel file that can be converted to one."""
+    return os.path.isfile(path) and path.lower().endswith((".pdf",) + WORD_EXTS + EXCEL_EXTS)
+
+
+def _convert_office(sources: list[str], out_dir: str) -> dict[str, str]:
+    """Convert Word/Excel files to PDF using the installed Microsoft Office."""
+    if sys.platform != "win32":
+        raise RuntimeError("Converting Word/Excel files needs Microsoft Office on Windows")
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError as exc:
+        raise RuntimeError("Converting Word/Excel files needs the pywin32 package") from exc
+
+    results: dict[str, str] = {}
+    pythoncom.CoInitialize()
+    apps: dict[str, object] = {}
+    try:
+        for index, path in enumerate(sources):
+            ext = os.path.splitext(path)[1].lower()
+            kind = "Word" if ext in WORD_EXTS else "Excel"
+            if kind not in apps:
+                app = win32com.client.DispatchEx(f"{kind}.Application")  # own instance, not yours
+                app.Visible = False
+                app.DisplayAlerts = 0
+                apps[kind] = app
+            app = apps[kind]
+            pdf = os.path.join(out_dir, f"{index}_{os.path.splitext(os.path.basename(path))[0]}.pdf")
+            doc = None
+            try:
+                if kind == "Word":
+                    doc = app.Documents.Open(os.path.abspath(path), ReadOnly=True, AddToRecentFiles=False)
+                    doc.ExportAsFixedFormat(pdf, 17)  # wdExportFormatPDF
+                else:
+                    doc = app.Workbooks.Open(os.path.abspath(path), ReadOnly=True)
+                    doc.ExportAsFixedFormat(0, pdf)  # xlTypePDF
+            except Exception as exc:  # noqa: BLE001 - COM errors are opaque
+                raise RuntimeError(f"Couldn't convert {os.path.basename(path)}: {exc}") from exc
+            finally:
+                if doc is not None:
+                    doc.Close(False)
+            results[path] = pdf
+    finally:
+        for app in apps.values():
+            with contextlib.suppress(Exception):
+                app.Quit()
+        pythoncom.CoUninitialize()
+    return results
+
+
+@contextlib.contextmanager
+def as_pdfs(sources: list[str]):
+    """Yield PDF paths for `sources` (same order), converting Office files to temp PDFs."""
+    need = [p for p in sources if not p.lower().endswith(".pdf")]
+    if not need:
+        yield list(sources)
+        return
+    tmp = tempfile.mkdtemp(prefix="pn_pdf_")
+    try:
+        converted = _convert_office(need, tmp)
+        yield [converted.get(p, p) for p in sources]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def page_count(path: str) -> int:
@@ -38,9 +111,10 @@ def _write(writer, dest: str) -> None:
 def merge_pdfs(sources: list[str], dest: str) -> None:
     from pypdf import PdfWriter
     writer = PdfWriter()
-    for path in sources:
-        writer.append(path)
-    _write(writer, dest)
+    with as_pdfs(sources) as pdfs:
+        for path in pdfs:
+            writer.append(path)
+        _write(writer, dest)
 
 
 def insert_pdfs(target: str, sources: list[str], after_page: int) -> None:
@@ -49,13 +123,14 @@ def insert_pdfs(target: str, sources: list[str], after_page: int) -> None:
     writer = PdfWriter()
     total = len(PdfReader(target).pages)
     after_page = max(0, min(after_page, total))
-    if after_page > 0:
-        writer.append(target, pages=(0, after_page))
-    for path in sources:
-        writer.append(path)
-    if after_page < total:
-        writer.append(target, pages=(after_page, total))
-    _write(writer, target)
+    with as_pdfs(sources) as pdfs:
+        if after_page > 0:
+            writer.append(target, pages=(0, after_page))
+        for path in pdfs:
+            writer.append(path)
+        if after_page < total:
+            writer.append(target, pages=(after_page, total))
+        _write(writer, target)
 
 
 class MergeOrderDialog(QDialog):
@@ -133,7 +208,7 @@ class InsertPositionDialog(QDialog):
         label = QLabel(
             f"Add <b>{names}</b> to <b>{os.path.basename(target)}</b> "
             f"({total_pages} page{'s' if total_pages != 1 else ''}).<br>"
-            "The original file will be updated."
+            "Word/Excel files are converted to PDF first.<br>The original file will be updated."
         )
         label.setWordWrap(True)
         layout.addWidget(label)
