@@ -203,7 +203,7 @@ class FileTree(QTreeWidget):
         if item is not None and not item.data(0, IS_DIR_ROLE):
             target = item.data(0, PATH_ROLE)
             sources = [p for p in paths if p != target]
-            if pdf_tools.is_pdf(target) and sources and all(pdf_tools.is_pdf(p) for p in sources):
+            if pdf_tools.is_pdf(target) and sources and all(pdf_tools.is_mergeable(p) for p in sources):
                 event.setDropAction(Qt.CopyAction)
                 event.accept()
                 self.pdfsDropped.emit(sources, target)
@@ -586,18 +586,21 @@ class FileBrowserView(QWidget):
         self._report("Moved" if move else "Copied", done, errors)
 
     def merge_selected_pdfs(self) -> None:
-        paths = [p for p in self.tree.selected_paths() if pdf_tools.is_pdf(p)]
+        paths = [p for p in self.tree.selected_paths() if pdf_tools.is_mergeable(p)]
         if len(paths) < 2:
             return
         dialog = MergeOrderDialog(paths, self.tree.current_dir, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         dest = dialog.output_path()
+        QApplication.setOverrideCursor(Qt.WaitCursor)  # Office conversion can take a while
         try:
             pdf_tools.merge_pdfs(dialog.ordered_paths(), dest)
         except Exception as exc:  # noqa: BLE001 - pypdf raises many error types
             self._report("Merge PDFs", 0, [str(exc)])
             return
+        finally:
+            QApplication.restoreOverrideCursor()
         self.statusMessage.emit(f"Merged {len(paths)} PDFs into {os.path.basename(dest)}", False)
         self.refreshRequested.emit()
 
@@ -607,7 +610,11 @@ class FileBrowserView(QWidget):
             dialog = InsertPositionDialog(target, sources, total, self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
-            pdf_tools.insert_pdfs(target, sources, dialog.after_page())
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                pdf_tools.insert_pdfs(target, sources, dialog.after_page())
+            finally:
+                QApplication.restoreOverrideCursor()
         except Exception as exc:  # noqa: BLE001
             self._report("Add PDF", 0, [f"{os.path.basename(target)}: {exc}"])
             return
@@ -634,7 +641,7 @@ class FileBrowserView(QWidget):
                 "Cancel scheduled delete", "",
                 lambda: [self.pending.cancel(p) for p in self.tree.selected_paths()], True,
             ))
-        if len([p for p in selected if pdf_tools.is_pdf(p)]) >= 2:
+        if len([p for p in selected if pdf_tools.is_mergeable(p)]) >= 2:
             entries += [None, ("Merge PDFs...", "", self.merge_selected_pdfs, True)]
         entries += [
             None,
