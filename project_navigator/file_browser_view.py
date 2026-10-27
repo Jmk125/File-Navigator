@@ -7,12 +7,13 @@ import re
 from PySide6.QtCore import QByteArray, QMimeData, QPoint, QRect, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QAction, QBrush, QColor, QGuiApplication, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
+    QAbstractItemView, QApplication, QDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QMenu,
     QMessageBox, QPushButton, QRubberBand, QToolButton, QTreeWidget, QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 
-from . import file_locks, fileops, pending_deletes, theme
+from . import file_locks, fileops, pdf_tools, pending_deletes, theme
+from .pdf_tools import InsertPositionDialog, MergeOrderDialog
 from .icons import darken, file_icon, format_file_size, format_modified
 
 PATH_ROLE = Qt.UserRole
@@ -77,6 +78,7 @@ DROP_EFFECT_MIME = 'application/x-qt-windows-mime;value="Preferred DropEffect"'
 class FileTree(QTreeWidget):
     """File list that drags real files out and accepts file drops in."""
     filesDropped = Signal(list, str, bool)  # source paths, target dir, move?
+    pdfsDropped = Signal(list, str)  # source PDFs, PDF they were dropped on
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -187,7 +189,8 @@ class FileTree(QTreeWidget):
         if event.mimeData().hasUrls() and self.current_dir:
             event.acceptProposedAction()
             item = self.itemAt(event.position().toPoint())
-            self.setCurrentItem(item) if item is not None and item.data(0, IS_DIR_ROLE) else None
+            if item is not None and (item.data(0, IS_DIR_ROLE) or pdf_tools.is_pdf(item.data(0, PATH_ROLE) or "")):
+                self.setCurrentItem(item)
         else:
             event.ignore()
 
@@ -196,6 +199,15 @@ class FileTree(QTreeWidget):
         if not paths or not self.current_dir:
             event.ignore()
             return
+        item = self.itemAt(event.position().toPoint())
+        if item is not None and not item.data(0, IS_DIR_ROLE):
+            target = item.data(0, PATH_ROLE)
+            sources = [p for p in paths if p != target]
+            if pdf_tools.is_pdf(target) and sources and all(pdf_tools.is_pdf(p) for p in sources):
+                event.setDropAction(Qt.CopyAction)
+                event.accept()
+                self.pdfsDropped.emit(sources, target)
+                return
         mods = event.modifiers()
         if event.source() is self:
             move = not mods & Qt.ControlModifier   # internal drag: move, Ctrl copies
@@ -274,6 +286,7 @@ class FileBrowserView(QWidget):
         self.tree.itemClicked.connect(self._activate_item)
         self.tree.installEventFilter(self)
         self.tree.filesDropped.connect(self._on_files_dropped)
+        self.tree.pdfsDropped.connect(self._on_pdfs_dropped)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.tree, 1)
@@ -572,6 +585,35 @@ class FileBrowserView(QWidget):
         done, errors = fileops.transfer(paths, target, move)
         self._report("Moved" if move else "Copied", done, errors)
 
+    def merge_selected_pdfs(self) -> None:
+        paths = [p for p in self.tree.selected_paths() if pdf_tools.is_pdf(p)]
+        if len(paths) < 2:
+            return
+        dialog = MergeOrderDialog(paths, self.tree.current_dir, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        dest = dialog.output_path()
+        try:
+            pdf_tools.merge_pdfs(dialog.ordered_paths(), dest)
+        except Exception as exc:  # noqa: BLE001 - pypdf raises many error types
+            self._report("Merge PDFs", 0, [str(exc)])
+            return
+        self.statusMessage.emit(f"Merged {len(paths)} PDFs into {os.path.basename(dest)}", False)
+        self.refreshRequested.emit()
+
+    def _on_pdfs_dropped(self, sources: list, target: str) -> None:
+        try:
+            total = pdf_tools.page_count(target)
+            dialog = InsertPositionDialog(target, sources, total, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            pdf_tools.insert_pdfs(target, sources, dialog.after_page())
+        except Exception as exc:  # noqa: BLE001
+            self._report("Add PDF", 0, [f"{os.path.basename(target)}: {exc}"])
+            return
+        self.statusMessage.emit(f"Added {len(sources)} PDF(s) to {os.path.basename(target)}", False)
+        self.refreshRequested.emit()
+
     def _show_context_menu(self, pos) -> None:
         item = self.tree.itemAt(pos)
         if item is not None and not item.isSelected():
@@ -592,6 +634,8 @@ class FileBrowserView(QWidget):
                 "Cancel scheduled delete", "",
                 lambda: [self.pending.cancel(p) for p in self.tree.selected_paths()], True,
             ))
+        if len([p for p in selected if pdf_tools.is_pdf(p)]) >= 2:
+            entries += [None, ("Merge PDFs...", "", self.merge_selected_pdfs, True)]
         entries += [
             None,
             ("New folder", "Ctrl+Shift+N", self.new_folder, True),

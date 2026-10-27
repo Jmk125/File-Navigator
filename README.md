@@ -23,6 +23,8 @@ In Traditional view the number-key hotkeys are off. `+ Quick Access` (or `+`) ad
 - **File operations** - in the file list: `Ctrl+C` / `Ctrl+X` / `Ctrl+V` (shared with Explorer's clipboard), `Del` (Recycle Bin; `Shift+Del` deletes permanently), `F2` rename, `Ctrl+Shift+N` new folder, plus a right-click menu. Multi-select with Ctrl/Shift-click.
 - **Delete when closed** - if a file is open in another program, deleting it offers to remove it automatically once it's closed (`Y`/`N`). Pending files show a red "Deletes when closed" tag in the list; click it (or right-click > Cancel scheduled delete) to cancel. Exiting with pending deletes asks for confirmation, since they only run while the app is open.
 - **Drag and drop** - drag files out to Explorer or a browser; drop files in from Explorer or a browser's downloads panel (copies; hold `Shift` to move). Dragging within the list moves (hold `Ctrl` to copy); drop on a folder row to put files inside it.
+- **Merge PDFs** - select two or more PDFs, right-click > *Merge PDFs...*, and set the order (drag rows or use Up/Down) and output name.
+- **Add a PDF to another PDF** - drag a PDF onto another PDF in the list; you're asked whether it goes at the beginning, the end, or after a specific page. The target PDF is updated in place.
 - Recent files, "Open in Explorer", "Add current folder to quick access", and project duplication all carry over from the original version.
 
 ## Data location
@@ -54,7 +56,7 @@ python app.py
 Double-click `build-exe.bat`, or run:
 
 ```bash
-pyinstaller --onefile --collect-submodules send2trash --windowed --name "Project Navigator" app.py
+pyinstaller --onefile --collect-submodules pypdf --collect-submodules send2trash --windowed --name "Project Navigator" app.py
 ```
 
 The executable will be created at `dist\Project Navigator.exe`. Make a desktop shortcut to it.
