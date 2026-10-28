@@ -284,6 +284,14 @@ class FileBrowserView(QWidget):
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree.setColumnWidth(0, 380)
         self.tree.itemClicked.connect(self._activate_item)
+        self._sort_column = 0
+        self._sort_ascending = True
+        self._data: tuple[list[str], list[dict], str] | None = None
+        header = self.tree.header()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(self._sort_column, Qt.AscendingOrder)
+        header.sectionClicked.connect(self._on_header_clicked)
         self.tree.installEventFilter(self)
         self.tree.filesDropped.connect(self._on_files_dropped)
         self.tree.pdfsDropped.connect(self._on_pdfs_dropped)
@@ -308,7 +316,38 @@ class FileBrowserView(QWidget):
             shortcut.setContext(Qt.WidgetShortcut)
             shortcut.activated.connect(handler)
 
+    def _on_header_clicked(self, column: int) -> None:
+        if column >= PENDING_COLUMN:
+            return
+        if column == self._sort_column:
+            self._sort_ascending = not self._sort_ascending
+        else:
+            self._sort_column, self._sort_ascending = column, True
+        self.tree.header().setSortIndicator(
+            self._sort_column, Qt.AscendingOrder if self._sort_ascending else Qt.DescendingOrder
+        )
+        if self._data is not None:
+            self.set_data(*self._data)
+
+    def _sorted(self, items: list[dict]) -> list[dict]:
+        """Folders stay on top (as in Explorer); the chosen column orders within each group."""
+        by_name = lambda e: e["name"].lower()  # noqa: E731
+        key = {
+            0: by_name,
+            1: lambda e: (e["size"], by_name(e)),
+            2: lambda e: (e.get("modified") or "", by_name(e)),
+        }[self._sort_column]
+        # Folders have no size, so for the Size column they just stay alphabetical.
+        folders = sorted((e for e in items if e["isDirectory"]),
+                         key=by_name if self._sort_column == 1 else key,
+                         reverse=self._sort_ascending is False and self._sort_column != 1)
+        files = sorted((e for e in items if not e["isDirectory"]), key=key,
+                       reverse=not self._sort_ascending)
+        return folders + files
+
     def set_data(self, history: list[str], items: list[dict], color: str) -> None:
+        self._data = (history, items, color)
+        items = self._sorted(items)
         self.breadcrumb.set_history(history)
         self.tree.current_dir = history[-1] if history else ""
         self._apply_header_color(color)
